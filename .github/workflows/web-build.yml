@@ -1,0 +1,35 @@
+name: Web Build Verification (Phase 1)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  web-build:
+    name: Verify TypeScript & Vite Web Production Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run TypeScript type check (Separated from Vite build per Section 9)
+        run: npm run lint
+
+      - name: Run Vite production web build
+        run: npm run build
+
+# NOTE (Section 9 Policy):
+# Windows (Electron EXE) and Android (Capacitor APK) native build jobs are intentionally
+# NOT auto-triggered in Phase 1. Native packaging, code signing, and release publishing
+# will be added and verified in subsequent stages.

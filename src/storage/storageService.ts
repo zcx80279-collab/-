@@ -1,0 +1,558 @@
+import { getDb, computeContentHash, dataUrlToBlob } from './db';
+import {
+  Asset,
+  Character,
+  ChatRoom,
+  Message,
+  StoryMemory,
+  CommunityPost,
+  CommunityComment,
+  CommunityItem,
+  CustomizationSettings,
+  AppSettings,
+  GUIDE_RAVI_ID,
+  CURRENT_SCHEMA_VERSION,
+} from '../core/types';
+import { DEFAULT_AVATARS } from '../core/defaultAssets';
+
+export interface AssetReferenceReport {
+  isReferenced: boolean;
+  referencedBy: string[];
+}
+
+export interface BackupServiceInterface {
+  exportFullDatabaseJson(): Promise<string>;
+  getCloudBackupStatus(): { implemented: boolean; provider: string; note: string };
+}
+
+/**
+ * Storage Service - Abstracts IndexedDB operations, content-hash deduplication,
+ * reference integrity verification, and future backup expansion hooks.
+ */
+export const storageService = {
+  // --- ASSETS ---
+  async getAllAssets(): Promise<Asset[]> {
+    const db = await getDb();
+    return db.getAll('assets');
+  },
+
+  async getAssetById(id: string): Promise<Asset | undefined> {
+    if (!id || id === 'none') return undefined;
+    const db = await getDb();
+    return db.get('assets', id);
+  },
+
+  async resolveAssetUrl(assetId?: string, fallbackType: 'avatar' | 'none' = 'avatar'): Promise<string> {
+    if (!assetId || assetId === 'none') {
+      return fallbackType === 'avatar' ? DEFAULT_AVATARS.ravi : '';
+    }
+    const asset = await this.getAssetById(assetId);
+    if (!asset) {
+      return fallbackType === 'avatar' ? DEFAULT_AVATARS.ravi : '';
+    }
+    return asset.dataUrl;
+  },
+
+  /**
+   * Registers an uploaded file or data URL into 'assets' store as a Blob + DataURL,
+   * using SHA-256 content hash to prevent duplicate copies of the same image.
+   */
+  async registerAssetFromFile(
+    file: File,
+    type: Asset['type'],
+    customName?: string
+  ): Promise<{ asset: Asset; deduplicated: boolean }> {
+    const db = await getDb();
+    const arrayBuffer = await file.arrayBuffer();
+    const contentHash = await computeContentHash(arrayBuffer);
+
+    // Check if an identical image with the same hash and type already exists
+    const existingByHash = await db.getAllFromIndex('assets', 'by-hash', contentHash);
+    const matchingAsset = existingByHash.find((a) => a.type === type);
+    if (matchingAsset) {
+      return { asset: matchingAsset, deduplicated: true };
+    }
+
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error('이미지 파일을 읽는 중 오류가 발생했습니다.'));
+      reader.readAsDataURL(file);
+    });
+
+    const blob = new Blob([arrayBuffer], { type: file.type || 'image/png' });
+    const newAsset: Asset = {
+      id: `asset-${type}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      name: customName || file.name,
+      type,
+      mimeType: file.type || 'image/png',
+      blob,
+      dataUrl,
+      contentHash,
+      isDefault: false,
+      createdAt: Date.now(),
+    };
+
+    await db.put('assets', newAsset);
+    return { asset: newAsset, deduplicated: false };
+  },
+
+  /**
+   * Checks whether an asset is currently referenced by any character, community post, or skin setting.
+   */
+  async checkAssetReferences(assetId: string): Promise<AssetReferenceReport> {
+    const db = await getDb();
+    const referencedBy: string[] = [];
+
+    const characters = await db.getAll('characters');
+    for (const c of characters) {
+      if (c.avatarAssetId === assetId) {
+        referencedBy.push(`캐릭터 프로필: ${c.name}`);
+      }
+    }
+
+    const communityItems = await db.getAll('community');
+    for (const item of communityItems) {
+      if (item.recordType === 'post' && item.post?.imageAssetId === assetId) {
+        referencedBy.push(`커뮤니티 게시글: ${item.post.title}`);
+      }
+    }
+
+    const custom = (await db.get('settings', 'customization')) as CustomizationSettings | undefined;
+    if (custom) {
+      if (custom.frameAssetId === assetId) referencedBy.push('현재 적용 중인 외부 프레임 스킨');
+      if (custom.chatBackgroundAssetId === assetId) referencedBy.push('현재 적용 중인 채팅방 배경 스킨');
+      if (custom.cornerAssetId === assetId) referencedBy.push('현재 적용 중인 모서리 장식 스킨');
+      if (custom.appBackgroundAssetId === assetId) referencedBy.push('현재 적용 중인 앱 전체 배경');
+      if (custom.customStickers?.includes(assetId)) referencedBy.push('등록된 커스텀 스티커 목록');
+    }
+
+    return {
+      isReferenced: referencedBy.length > 0,
+      referencedBy,
+    };
+  },
+
+  async deleteAssetSafely(assetId: string, forceIfReferenced = false): Promise<{ deleted: boolean; reason?: string }> {
+    const db = await getDb();
+    const asset = await db.get('assets', assetId);
+    if (!asset) return { deleted: false, reason: '존재하지 않는 에셋입니다.' };
+    if (asset.isDefault) {
+      return { deleted: false, reason: '시스템 기본 내장 에셋은 삭제할 수 없습니다.' };
+    }
+
+    const refReport = await this.checkAssetReferences(assetId);
+    if (refReport.isReferenced && !forceIfReferenced) {
+      return {
+        deleted: false,
+        reason: `다른 데이터에서 참조 중인 에셋입니다: ${refReport.referencedBy.join(', ')}`,
+      };
+    }
+
+    await db.delete('assets', assetId);
+    return { deleted: true };
+  },
+
+  // --- CHARACTERS ---
+  async getAllCharacters(): Promise<Character[]> {
+    const db = await getDb();
+    const chars = await db.getAll('characters');
+    return chars.sort((a, b) => {
+      if (a.id === GUIDE_RAVI_ID) return -1;
+      if (b.id === GUIDE_RAVI_ID) return 1;
+      return b.updatedAt - a.updatedAt;
+    });
+  },
+
+  async saveCharacter(char: Character): Promise<Character> {
+    const db = await getDb();
+    if (char.id === GUIDE_RAVI_ID) {
+      throw new Error('기본 안내 캐릭터(안내 라비)의 고유 설정이나 이름은 수정할 수 없습니다.');
+    }
+
+    const existing = await db.get('characters', char.id);
+    const now = Date.now();
+    const toSave: Character = {
+      ...char,
+      createdAt: existing ? existing.createdAt : char.createdAt || now,
+      updatedAt: now,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      isSystemGuide: false,
+    };
+
+    const tx = db.transaction(['characters', 'rooms', 'stories'], 'readwrite');
+    await tx.objectStore('characters').put(toSave);
+
+    // Ensure a default chat room and story memory structure exist for the character
+    const roomIndex = tx.objectStore('rooms').index('by-character');
+    const existingRooms = await roomIndex.getAll(toSave.id);
+    if (existingRooms.length === 0) {
+      const newRoom: ChatRoom = {
+        id: `room-${toSave.id}`,
+        title: `${toSave.name} 대화방`,
+        characterId: toSave.id,
+        mode: 'daily',
+        createdAt: now,
+        updatedAt: now,
+      };
+      await tx.objectStore('rooms').put(newRoom);
+    }
+
+    const storyIndex = tx.objectStore('stories').index('by-character');
+    const existingStories = await storyIndex.getAll(toSave.id);
+    if (existingStories.length === 0) {
+      const newStory: StoryMemory = {
+        id: `story-${toSave.id}`,
+        characterId: toSave.id,
+        worldView: '',
+        relationships: '',
+        startingSituation: '',
+        keyMemories: [],
+        updatedAt: now,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+      };
+      await tx.objectStore('stories').put(newStory);
+    }
+
+    await tx.done;
+    return toSave;
+  },
+
+  /**
+   * Deletes ONLY the character entry while strictly preserving all related chat rooms,
+   * chat messages, story memories, and community posts/comments (Section 3 Data Protection rule).
+   */
+  async deleteCharacterPreservingRecords(characterId: string): Promise<{
+    preservedRooms: number;
+    preservedMessages: number;
+    preservedStories: number;
+  }> {
+    if (characterId === GUIDE_RAVI_ID) {
+      throw new Error('기본 내장 안내 캐릭터인 안내 라비는 삭제할 수 없습니다.');
+    }
+
+    const db = await getDb();
+    const rooms = await db.getAllFromIndex('rooms', 'by-character', characterId);
+    let preservedMessages = 0;
+    for (const r of rooms) {
+      const msgs = await db.getAllFromIndex('messages', 'by-room', r.id);
+      preservedMessages += msgs.length;
+    }
+    const stories = await db.getAllFromIndex('stories', 'by-character', characterId);
+
+    // Delete ONLY from 'characters' store
+    await db.delete('characters', characterId);
+
+    return {
+      preservedRooms: rooms.length,
+      preservedMessages,
+      preservedStories: stories.length,
+    };
+  },
+
+  // --- CHAT ROOMS & MESSAGES ---
+  async getAllRooms(): Promise<ChatRoom[]> {
+    const db = await getDb();
+    const rooms = await db.getAll('rooms');
+    return rooms.sort((a, b) => {
+      if (a.characterId === GUIDE_RAVI_ID) return -1;
+      if (b.characterId === GUIDE_RAVI_ID) return 1;
+      return b.updatedAt - a.updatedAt;
+    });
+  },
+
+  async createChatRoom(characterId: string, title?: string, mode: 'daily' | 'story' = 'daily'): Promise<ChatRoom> {
+    const db = await getDb();
+    const char = await db.get('characters', characterId);
+    const now = Date.now();
+    const room: ChatRoom = {
+      id: `room-${characterId}-${now}`,
+      title: title?.trim() || `${char ? char.name : '보존된 캐릭터'} 대화방`,
+      characterId,
+      mode,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.put('rooms', room);
+    return room;
+  },
+
+  async updateRoomMode(roomId: string, mode: 'daily' | 'story'): Promise<ChatRoom> {
+    const db = await getDb();
+    const room = await db.get('rooms', roomId);
+    if (!room) throw new Error('채팅방을 찾을 수 없습니다.');
+    room.mode = mode;
+    room.updatedAt = Date.now();
+    await db.put('rooms', room);
+    return room;
+  },
+
+  async getMessagesByRoom(roomId: string): Promise<Message[]> {
+    const db = await getDb();
+    const msgs = await db.getAllFromIndex('messages', 'by-room', roomId);
+    return msgs.sort((a, b) => a.timestamp - b.timestamp);
+  },
+
+  async addMessage(msg: Omit<Message, 'id' | 'timestamp'>): Promise<Message> {
+    const db = await getDb();
+    const now = Date.now();
+    const fullMsg: Message = {
+      ...msg,
+      id: `msg-${now}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: now,
+    };
+
+    const tx = db.transaction(['messages', 'rooms'], 'readwrite');
+    await tx.objectStore('messages').put(fullMsg);
+    const room = await tx.objectStore('rooms').get(msg.roomId);
+    if (room) {
+      room.updatedAt = now;
+      await tx.objectStore('rooms').put(room);
+    }
+    await tx.done;
+    return fullMsg;
+  },
+
+  async toggleMessageBookmark(messageId: string): Promise<Message | undefined> {
+    const db = await getDb();
+    const msg = await db.get('messages', messageId);
+    if (!msg) return undefined;
+    msg.isSavedFromCleanup = !msg.isSavedFromCleanup;
+    await db.put('messages', msg);
+    return msg;
+  },
+
+  // --- STORY MODE & KEY MEMORIES ---
+  async getStoryMemory(characterId: string): Promise<StoryMemory> {
+    const db = await getDb();
+    const existing = await db.getAllFromIndex('stories', 'by-character', characterId);
+    if (existing.length > 0) {
+      return existing[0];
+    }
+    const fresh: StoryMemory = {
+      id: `story-${characterId}`,
+      characterId,
+      worldView: '',
+      relationships: '',
+      startingSituation: '',
+      keyMemories: [],
+      updatedAt: Date.now(),
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+    };
+    await db.put('stories', fresh);
+    return fresh;
+  },
+
+  async saveStoryMemory(story: StoryMemory): Promise<StoryMemory> {
+    const db = await getDb();
+    const updated: StoryMemory = {
+      ...story,
+      updatedAt: Date.now(),
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+    };
+    await db.put('stories', updated);
+    return updated;
+  },
+
+  // --- COMMUNITY (Virtual SNS in 'community' store) ---
+  async getCommunityFeed(): Promise<{ posts: CommunityPost[]; commentsByPost: Record<string, CommunityComment[]> }> {
+    const db = await getDb();
+    const items = await db.getAll('community');
+    const posts: CommunityPost[] = [];
+    const commentsByPost: Record<string, CommunityComment[]> = {};
+
+    for (const item of items) {
+      if (item.recordType === 'post' && item.post) {
+        posts.push(item.post);
+      } else if (item.recordType === 'comment' && item.comment) {
+        const pid = item.comment.postId;
+        if (!commentsByPost[pid]) commentsByPost[pid] = [];
+        commentsByPost[pid].push(item.comment);
+      }
+    }
+
+    posts.sort((a, b) => b.createdAt - a.createdAt);
+    for (const pid of Object.keys(commentsByPost)) {
+      commentsByPost[pid].sort((a, b) => a.createdAt - b.createdAt);
+    }
+
+    return { posts, commentsByPost };
+  },
+
+  async createCommunityPost(postData: Omit<CommunityPost, 'id' | 'createdAt' | 'likes' | 'commentsCount'>): Promise<CommunityPost> {
+    const db = await getDb();
+    const now = Date.now();
+    const post: CommunityPost = {
+      ...postData,
+      id: `post-${now}-${Math.random().toString(36).substring(2, 6)}`,
+      likes: 0,
+      commentsCount: 0,
+      createdAt: now,
+    };
+    const item: CommunityItem = {
+      id: post.id,
+      recordType: 'post',
+      createdAt: now,
+      isExample: post.isExample,
+      post,
+    };
+    await db.put('community', item);
+    return post;
+  },
+
+  async addCommunityComment(commentData: Omit<CommunityComment, 'id' | 'createdAt'>): Promise<CommunityComment> {
+    const db = await getDb();
+    const now = Date.now();
+    const comment: CommunityComment = {
+      ...commentData,
+      id: `comm-${now}-${Math.random().toString(36).substring(2, 6)}`,
+      createdAt: now,
+    };
+    const tx = db.transaction('community', 'readwrite');
+    await tx.store.put({
+      id: comment.id,
+      recordType: 'comment',
+      createdAt: now,
+      isExample: comment.isExample,
+      comment,
+    });
+
+    const postItem = await tx.store.get(comment.postId);
+    if (postItem && postItem.post) {
+      postItem.post.commentsCount = (postItem.post.commentsCount || 0) + 1;
+      await tx.store.put(postItem);
+    }
+    await tx.done;
+    return comment;
+  },
+
+  async deleteExampleCommunityDataOnly(): Promise<number> {
+    const db = await getDb();
+    const items = await db.getAll('community');
+    const tx = db.transaction('community', 'readwrite');
+    let deletedCount = 0;
+    for (const item of items) {
+      if (item.isExample) {
+        await tx.store.delete(item.id);
+        deletedCount++;
+      }
+    }
+    await tx.done;
+    return deletedCount;
+  },
+
+  async deleteCommunityPost(postId: string): Promise<void> {
+    const db = await getDb();
+    const items = await db.getAll('community');
+    const tx = db.transaction('community', 'readwrite');
+    await tx.store.delete(postId);
+    for (const item of items) {
+      if (item.recordType === 'comment' && item.comment?.postId === postId) {
+        await tx.store.delete(item.id);
+      }
+    }
+    await tx.done;
+  },
+
+  // --- CUSTOMIZATION & SETTINGS ---
+  async getCustomizationSettings(): Promise<CustomizationSettings> {
+    const db = await getDb();
+    const res = (await db.get('settings', 'customization')) as CustomizationSettings | undefined;
+    if (res) return res;
+    const fallback: CustomizationSettings = {
+      id: 'customization',
+      theme: 'dark-indigo',
+      frameAssetId: 'default-frame-indigo',
+      cornerAssetId: 'none',
+      appBackgroundAssetId: 'none',
+      chatBackgroundAssetId: 'default-chat-bg-night',
+      bubbleStyle: 'glass',
+      customStickers: [],
+      updatedAt: Date.now(),
+    };
+    await db.put('settings', fallback);
+    return fallback;
+  },
+
+  async saveCustomizationSettings(settings: Omit<CustomizationSettings, 'id' | 'updatedAt'>): Promise<CustomizationSettings> {
+    const db = await getDb();
+    const full: CustomizationSettings = {
+      ...settings,
+      id: 'customization',
+      updatedAt: Date.now(),
+    };
+    await db.put('settings', full);
+    return full;
+  },
+
+  async resetCustomizationToDefault(): Promise<CustomizationSettings> {
+    const defaultSettings: Omit<CustomizationSettings, 'id' | 'updatedAt'> = {
+      theme: 'dark-indigo',
+      frameAssetId: 'default-frame-indigo',
+      cornerAssetId: 'none',
+      appBackgroundAssetId: 'none',
+      chatBackgroundAssetId: 'default-chat-bg-night',
+      bubbleStyle: 'glass',
+      customStickers: [],
+    };
+    return this.saveCustomizationSettings(defaultSettings);
+  },
+
+  async getAppSettings(): Promise<AppSettings> {
+    const db = await getDb();
+    const res = (await db.get('settings', 'app_settings')) as AppSettings | undefined;
+    if (res) return res;
+    const fallback: AppSettings = {
+      id: 'app_settings',
+      soundEnabled: true,
+      aiImageGenerationEnabled: false,
+      autoCleanupDays: 3,
+      autoCleanupEnabled: false,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      updatedAt: Date.now(),
+    };
+    await db.put('settings', fallback);
+    return fallback;
+  },
+
+  async saveAppSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+    const current = await this.getAppSettings();
+    const db = await getDb();
+    const updated: AppSettings = {
+      ...current,
+      ...settings,
+      id: 'app_settings',
+      updatedAt: Date.now(),
+    };
+    await db.put('settings', updated);
+    return updated;
+  },
+
+  // --- BACKUP & EXPORT INTERFACE ---
+  async exportSnapshotJson(): Promise<string> {
+    const db = await getDb();
+    const snapshot = {
+      appName: '러비러비톡 (Lovy Lovy Talk)',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      exportedAt: new Date().toISOString(),
+      stores: {
+        characters: await db.getAll('characters'),
+        rooms: await db.getAll('rooms'),
+        messages: await db.getAll('messages'),
+        stories: await db.getAll('stories'),
+        community: await db.getAll('community'),
+        settings: await db.getAll('settings'),
+        assetsMetadata: (await db.getAll('assets')).map((a) => ({
+          id: a.id,
+          name: a.name,
+          type: a.type,
+          mimeType: a.mimeType,
+          contentHash: a.contentHash,
+          isDefault: a.isDefault,
+          createdAt: a.createdAt,
+        })),
+      },
+    };
+    return JSON.stringify(snapshot, null, 2);
+  },
+};

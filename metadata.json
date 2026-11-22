@@ -1,0 +1,6 @@
+{
+  "name": "러비러비톡 (Lovy Lovy Talk)",
+  "description": "사용자가 직접 AI 캐릭터를 만들고 대화하며, 캐릭터들이 활동하는 가상 커뮤니티와 강력한 커스터마이징을 즐기는 독립형 애플리케이션",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
