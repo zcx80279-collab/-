@@ -1,4 +1,4 @@
-import { getDb, computeContentHash, dataUrlToBlob } from './db';
+import { getDb, computeContentHash } from './db';
 import {
   Asset,
   Character,
@@ -10,6 +10,10 @@ import {
   CommunityItem,
   CustomizationSettings,
   AppSettings,
+  UserProfile,
+  NarratorSceneType,
+  RoomCustomizationOverride,
+  RoomCharacterPromptOverride,
   GUIDE_RAVI_ID,
   CURRENT_SCHEMA_VERSION,
 } from '../core/types';
@@ -27,7 +31,7 @@ export interface BackupServiceInterface {
 
 /**
  * Storage Service - Abstracts IndexedDB operations, content-hash deduplication,
- * reference integrity verification, and future backup expansion hooks.
+ * reference integrity verification, user profile persistence, and backup expansion hooks.
  */
 export const storageService = {
   // --- ASSETS ---
@@ -53,10 +57,6 @@ export const storageService = {
     return asset.dataUrl;
   },
 
-  /**
-   * Registers an uploaded file or data URL into 'assets' store as a Blob + DataURL,
-   * using SHA-256 content hash to prevent duplicate copies of the same image.
-   */
   async registerAssetFromFile(
     file: File,
     type: Asset['type'],
@@ -66,7 +66,6 @@ export const storageService = {
     const arrayBuffer = await file.arrayBuffer();
     const contentHash = await computeContentHash(arrayBuffer);
 
-    // Check if an identical image with the same hash and type already exists
     const existingByHash = await db.getAllFromIndex('assets', 'by-hash', contentHash);
     const matchingAsset = existingByHash.find((a) => a.type === type);
     if (matchingAsset) {
@@ -97,9 +96,6 @@ export const storageService = {
     return { asset: newAsset, deduplicated: false };
   },
 
-  /**
-   * Checks whether an asset is currently referenced by any character, community post, or skin setting.
-   */
   async checkAssetReferences(assetId: string): Promise<AssetReferenceReport> {
     const db = await getDb();
     const referencedBy: string[] = [];
@@ -111,6 +107,11 @@ export const storageService = {
       }
     }
 
+    const userProf = (await db.get('settings', 'user_profile')) as UserProfile | undefined;
+    if (userProf && userProf.avatarAssetId === assetId) {
+      referencedBy.push(`나의 분신 프로필: ${userProf.name}`);
+    }
+
     const communityItems = await db.getAll('community');
     for (const item of communityItems) {
       if (item.recordType === 'post' && item.post?.imageAssetId === assetId) {
@@ -120,11 +121,22 @@ export const storageService = {
 
     const custom = (await db.get('settings', 'customization')) as CustomizationSettings | undefined;
     if (custom) {
-      if (custom.frameAssetId === assetId) referencedBy.push('현재 적용 중인 외부 프레임 스킨');
-      if (custom.chatBackgroundAssetId === assetId) referencedBy.push('현재 적용 중인 채팅방 배경 스킨');
-      if (custom.cornerAssetId === assetId) referencedBy.push('현재 적용 중인 모서리 장식 스킨');
-      if (custom.appBackgroundAssetId === assetId) referencedBy.push('현재 적용 중인 앱 전체 배경');
+      if (custom.frameAssetId === assetId) referencedBy.push('공용 기본 외부 프레임 스킨');
+      if (custom.chatBackgroundAssetId === assetId) referencedBy.push('공용 기본 채팅방 배경 스킨');
+      if (custom.cornerAssetId === assetId) referencedBy.push('공용 기본 모서리 장식 스킨');
+      if (custom.appBackgroundAssetId === assetId) referencedBy.push('공용 기본 앱 전체 배경');
       if (custom.customStickers?.includes(assetId)) referencedBy.push('등록된 커스텀 스티커 목록');
+    }
+
+    const rooms = await db.getAll('rooms');
+    for (const room of rooms) {
+      const rc = room.customization;
+      if (!rc) continue;
+      const roomLabel = room.title || room.id;
+      if (rc.frameAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 프레임`);
+      if (rc.chatBackgroundAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 배경`);
+      if (rc.cornerAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 모서리 장식`);
+      if (rc.appBackgroundAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 전체 배경`);
     }
 
     return {
@@ -153,6 +165,46 @@ export const storageService = {
     return { deleted: true };
   },
 
+  // --- USER PROFILE (Separate from Character Info) ---
+  async getUserProfile(): Promise<UserProfile | null> {
+    const db = await getDb();
+    const profile = (await db.get('settings', 'user_profile')) as UserProfile | undefined;
+    if (profile && profile.name && profile.name.trim()) {
+      return profile;
+    }
+    return null;
+  },
+
+  async saveUserProfile(input: {
+    name: string;
+    avatarAssetId?: string;
+    appearance?: string;
+    personality?: string;
+    bio?: string;
+    additionalInfo?: string;
+  }): Promise<UserProfile> {
+    const trimmedName = input.name.trim();
+    if (!trimmedName) {
+      throw new Error('이름 또는 닉네임은 필수 입력 항목입니다.');
+    }
+    const db = await getDb();
+    const existing = (await db.get('settings', 'user_profile')) as UserProfile | undefined;
+    const now = Date.now();
+    const profile: UserProfile = {
+      id: 'user_profile',
+      name: trimmedName,
+      avatarAssetId: input.avatarAssetId && input.avatarAssetId !== 'none' ? input.avatarAssetId : undefined,
+      appearance: (input.appearance ?? '').trim(),
+      personality: (input.personality ?? '').trim(),
+      bio: (input.bio ?? '').trim(),
+      additionalInfo: (input.additionalInfo ?? '').trim(),
+      createdAt: existing ? existing.createdAt : now,
+      updatedAt: now,
+    };
+    await db.put('settings', profile);
+    return profile;
+  },
+
   // --- CHARACTERS ---
   async getAllCharacters(): Promise<Character[]> {
     const db = await getDb();
@@ -174,6 +226,9 @@ export const storageService = {
     const now = Date.now();
     const toSave: Character = {
       ...char,
+      speechAndBehavior: (char.speechAndBehavior ?? '').trim(),
+      worldView: (char.worldView ?? '').trim(),
+      migratedWorldViews: char.migratedWorldViews ?? existing?.migratedWorldViews,
       createdAt: existing ? existing.createdAt : char.createdAt || now,
       updatedAt: now,
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -204,10 +259,11 @@ export const storageService = {
       const newStory: StoryMemory = {
         id: `story-${toSave.id}`,
         characterId: toSave.id,
-        worldView: '',
+        worldView: toSave.worldView || '',
         relationships: '',
         startingSituation: '',
         keyMemories: [],
+        migratedToCharacter: true,
         updatedAt: now,
         schemaVersion: CURRENT_SCHEMA_VERSION,
       };
@@ -218,10 +274,6 @@ export const storageService = {
     return toSave;
   },
 
-  /**
-   * Deletes ONLY the character entry while strictly preserving all related chat rooms,
-   * chat messages, story memories, and community posts/comments (Section 3 Data Protection rule).
-   */
   async deleteCharacterPreservingRecords(characterId: string): Promise<{
     preservedRooms: number;
     preservedMessages: number;
@@ -287,6 +339,63 @@ export const storageService = {
     return room;
   },
 
+  async updateRoomNarratorType(roomId: string, sceneType: NarratorSceneType): Promise<void> {
+    const db = await getDb();
+    const room = await db.get('rooms', roomId);
+    if (!room) return;
+    room.lastNarratorType = sceneType;
+    room.updatedAt = Date.now();
+    await db.put('rooms', room);
+  },
+
+  async updateRoomSettings(
+    roomId: string,
+    patch: {
+      customization?: RoomCustomizationOverride;
+      clearCustomization?: boolean;
+      promptOverride?: RoomCharacterPromptOverride;
+      clearPromptOverride?: boolean;
+      makjangMode?: boolean;
+    }
+  ): Promise<ChatRoom> {
+    const db = await getDb();
+    const room = await db.get('rooms', roomId);
+    if (!room) throw new Error('채팅방을 찾을 수 없습니다.');
+
+    if (patch.clearCustomization) {
+      delete room.customization;
+    } else if (patch.customization) {
+      room.customization = {
+        ...(room.customization || {}),
+        ...patch.customization,
+      };
+    }
+
+    if (patch.clearPromptOverride) {
+      delete room.promptOverride;
+    } else if (patch.promptOverride) {
+      const cleaned: RoomCharacterPromptOverride = {};
+      if (patch.promptOverride.characterInfoAndPersonality !== undefined) {
+        cleaned.characterInfoAndPersonality = patch.promptOverride.characterInfoAndPersonality;
+      }
+      if (patch.promptOverride.speechAndBehavior !== undefined) {
+        cleaned.speechAndBehavior = patch.promptOverride.speechAndBehavior;
+      }
+      if (patch.promptOverride.worldView !== undefined) {
+        cleaned.worldView = patch.promptOverride.worldView;
+      }
+      room.promptOverride = cleaned;
+    }
+
+    if (typeof patch.makjangMode === 'boolean') {
+      room.makjangMode = patch.makjangMode;
+    }
+
+    room.updatedAt = Date.now();
+    await db.put('rooms', room);
+    return room;
+  },
+
   async getMessagesByRoom(roomId: string): Promise<Message[]> {
     const db = await getDb();
     const msgs = await db.getAllFromIndex('messages', 'by-room', roomId);
@@ -307,6 +416,9 @@ export const storageService = {
     const room = await tx.objectStore('rooms').get(msg.roomId);
     if (room) {
       room.updatedAt = now;
+      if (msg.narratorSceneType) {
+        room.lastNarratorType = msg.narratorSceneType;
+      }
       await tx.objectStore('rooms').put(room);
     }
     await tx.done;
@@ -322,13 +434,14 @@ export const storageService = {
     return msg;
   },
 
-  // --- STORY MODE & KEY MEMORIES ---
+  // --- STORY MODE & 추억의 한조각 (KEY MEMORIES) ---
   async getStoryMemory(characterId: string): Promise<StoryMemory> {
     const db = await getDb();
     const existing = await db.getAllFromIndex('stories', 'by-character', characterId);
     if (existing.length > 0) {
       return existing[0];
     }
+    // Requirement 3: Never auto-generate example or default memories; leave empty when not written
     const fresh: StoryMemory = {
       id: `story-${characterId}`,
       characterId,
@@ -336,6 +449,7 @@ export const storageService = {
       relationships: '',
       startingSituation: '',
       keyMemories: [],
+      migratedToCharacter: true,
       updatedAt: Date.now(),
       schemaVersion: CURRENT_SCHEMA_VERSION,
     };
@@ -501,10 +615,16 @@ export const storageService = {
   async getAppSettings(): Promise<AppSettings> {
     const db = await getDb();
     const res = (await db.get('settings', 'app_settings')) as AppSettings | undefined;
-    if (res) return res;
+    if (res) {
+      if (typeof res.narratorEnabled !== 'boolean') {
+        res.narratorEnabled = true;
+      }
+      return res;
+    }
     const fallback: AppSettings = {
       id: 'app_settings',
       soundEnabled: true,
+      narratorEnabled: true,
       aiImageGenerationEnabled: false,
       autoCleanupDays: 3,
       autoCleanupEnabled: false,

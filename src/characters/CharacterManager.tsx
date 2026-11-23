@@ -1,9 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Character, Asset, GUIDE_RAVI_ID, CURRENT_SCHEMA_VERSION } from '../core/types';
+import {
+  Character,
+  Asset,
+  UserProfile,
+  MigratedWorldViewRecord,
+  GUIDE_RAVI_ID,
+  CURRENT_SCHEMA_VERSION,
+} from '../core/types';
 import { storageService } from '../storage/storageService';
 import { DEFAULT_AVATARS } from '../core/defaultAssets';
 import {
   UserPlus,
+  UserCircle2,
   Edit3,
   Trash2,
   Lock,
@@ -15,14 +23,24 @@ import {
   CheckCircle2,
   X,
   Save,
+  Globe,
+  Sparkles,
 } from 'lucide-react';
 
 interface CharacterManagerProps {
+  userProfile: UserProfile | null;
+  autoOpenPersonaEditor?: boolean;
+  onPersonaEditorHandled?: () => void;
+  onUserProfileUpdated: (profile: UserProfile) => void;
   onOpenChatWithCharacter: (characterId: string) => void;
   onDataChanged: () => void;
 }
 
 export const CharacterManager: React.FC<CharacterManagerProps> = ({
+  userProfile,
+  autoOpenPersonaEditor = false,
+  onPersonaEditorHandled,
+  onUserProfileUpdated,
   onOpenChatWithCharacter,
   onDataChanged,
 }) => {
@@ -32,15 +50,30 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
   const [editingChar, setEditingChar] = useState<Character | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
-  // Form states
+  // Form states (Requirement 2: 캐릭터 이름, 프로필 이미지, 캐릭터 정보 및 성격, 말투 및 행동 특성, 세계관 설정)
   const [name, setName] = useState('');
   const [avatarAssetId, setAvatarAssetId] = useState('sample-luna-avatar');
-  const [systemPrompt, setSystemPrompt] = useState('');
   const [description, setDescription] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
   const [customPersonality, setCustomPersonality] = useState('');
+  const [speechAndBehavior, setSpeechAndBehavior] = useState('');
+  const [worldView, setWorldView] = useState('');
   const [customNote, setCustomNote] = useState('');
+  const [migratedConflicts, setMigratedConflicts] = useState<MigratedWorldViewRecord[]>([]);
 
-  // Custom modal confirmation for safe character deletion (no window.alert / window.confirm)
+  // 「나의 분신」 (User Persona) form states
+  const [isEditingPersona, setIsEditingPersona] = useState(false);
+  const [personaName, setPersonaName] = useState(userProfile?.name || '');
+  const [personaAvatarId, setPersonaAvatarId] = useState(userProfile?.avatarAssetId || 'none');
+  const [personaAppearance, setPersonaAppearance] = useState(userProfile?.appearance || '');
+  const [personaPersonality, setPersonaPersonality] = useState(userProfile?.personality || '');
+  const [personaBioAndExtra, setPersonaBioAndExtra] = useState(
+    [userProfile?.bio, userProfile?.additionalInfo].filter(Boolean).join('\n\n')
+  );
+  const personaFileInputRef = useRef<HTMLInputElement>(null);
+  const personaSectionRef = useRef<HTMLDivElement>(null);
+
+  // Custom modal confirmation for safe character deletion
   const [deleteTarget, setDeleteTarget] = useState<Character | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
@@ -50,6 +83,28 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
   useEffect(() => {
     loadCharactersAndAssets();
   }, []);
+
+  useEffect(() => {
+    setPersonaName(userProfile?.name || '');
+    setPersonaAvatarId(userProfile?.avatarAssetId || 'none');
+    setPersonaAppearance(userProfile?.appearance || '');
+    setPersonaPersonality(userProfile?.personality || '');
+    setPersonaBioAndExtra(
+      [userProfile?.bio, userProfile?.additionalInfo].filter(Boolean).join('\n\n')
+    );
+  }, [userProfile]);
+
+  useEffect(() => {
+    if (autoOpenPersonaEditor) {
+      setIsEditingPersona(true);
+      setIsCreating(false);
+      setEditingChar(null);
+      setTimeout(() => {
+        personaSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
+      onPersonaEditorHandled?.();
+    }
+  }, [autoOpenPersonaEditor]);
 
   const loadCharactersAndAssets = async () => {
     const [chars, allAssets] = await Promise.all([
@@ -67,19 +122,76 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
     setAssetUrls(urlMap);
   };
 
+  const handleUploadPersonaAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const { asset } = await storageService.registerAssetFromFile(
+        file,
+        'avatar',
+        `나의 분신: ${file.name}`
+      );
+      await loadCharactersAndAssets();
+      setPersonaAvatarId(asset.id);
+      setFeedbackMsg({
+        type: 'info',
+        text: '나의 분신 프로필 이미지가 로컬 "assets" 스토어에 등록되었습니다. (매 대화 시 API에는 전송되지 않습니다.)',
+      });
+    } catch (err) {
+      setFeedbackMsg({
+        type: 'error',
+        text: err instanceof Error ? err.message : '프로필 이미지 등록 실패',
+      });
+    }
+    e.target.value = '';
+  };
+
+  const handleSavePersona = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!personaName.trim()) {
+      setFeedbackMsg({ type: 'error', text: '이름 또는 닉네임을 입력해 주세요.' });
+      return;
+    }
+    try {
+      const saved = await storageService.saveUserProfile({
+        name: personaName.trim(),
+        avatarAssetId: personaAvatarId !== 'none' ? personaAvatarId : undefined,
+        appearance: personaAppearance.trim(),
+        personality: personaPersonality.trim(),
+        bio: personaBioAndExtra.trim(),
+        additionalInfo: '',
+      });
+      onUserProfileUpdated(saved);
+      onDataChanged();
+      setIsEditingPersona(false);
+      setFeedbackMsg({
+        type: 'success',
+        text: `「나의 분신」 (${saved.name}) 정보가 저장되었습니다. 모든 AI 캐릭터와 사회자가 대화 시 이 정보를 참조합니다.`,
+      });
+    } catch (err) {
+      setFeedbackMsg({
+        type: 'error',
+        text: err instanceof Error ? err.message : '나의 분신 저장 중 오류가 발생했습니다.',
+      });
+    }
+  };
+
   const handleStartCreate = () => {
     setIsCreating(true);
     setEditingChar(null);
     setName('');
     setAvatarAssetId(avatarAssets[0]?.id || 'sample-luna-avatar');
-    setSystemPrompt('');
     setDescription('');
+    setSystemPrompt('');
     setCustomPersonality('');
+    setSpeechAndBehavior('');
+    setWorldView('');
     setCustomNote('');
+    setMigratedConflicts([]);
     setFeedbackMsg(null);
   };
 
-  const handleStartEdit = (char: Character) => {
+  const handleStartEdit = async (char: Character) => {
     if (char.id === GUIDE_RAVI_ID || char.isSystemGuide) {
       setFeedbackMsg({
         type: 'error',
@@ -87,14 +199,52 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
       });
       return;
     }
+
+    // Check if there is any legacy story setting to display or migrate safely
+    const story = await storageService.getStoryMemory(char.id);
+    const legacyParts: string[] = [];
+    if (story.worldView?.trim()) legacyParts.push(story.worldView.trim());
+    if (story.relationships?.trim()) legacyParts.push(`[관계 설정] ${story.relationships.trim()}`);
+    if (story.startingSituation?.trim()) legacyParts.push(`[시작 상황] ${story.startingSituation.trim()}`);
+    const combinedLegacy = legacyParts.join('\n');
+
+    let resolvedWorldView = (char.worldView || '').trim();
+    const conflicts: MigratedWorldViewRecord[] = [...(char.migratedWorldViews || [])];
+
+    if (!resolvedWorldView && combinedLegacy) {
+      resolvedWorldView = combinedLegacy;
+    } else if (
+      resolvedWorldView &&
+      combinedLegacy &&
+      resolvedWorldView !== combinedLegacy &&
+      !resolvedWorldView.includes(combinedLegacy)
+    ) {
+      const alreadyInConflicts = conflicts.some((c) => c.worldView === story.worldView);
+      if (!alreadyInConflicts) {
+        conflicts.push({
+          sourceId: story.id,
+          worldView: story.worldView,
+          relationships: story.relationships,
+          startingSituation: story.startingSituation,
+          migratedAt: Date.now(),
+        });
+      }
+    }
+
     setIsCreating(false);
     setEditingChar(char);
     setName(char.name);
     setAvatarAssetId(char.avatarAssetId);
-    setSystemPrompt(char.systemPrompt);
     setDescription(char.description);
+    setSystemPrompt(char.systemPrompt);
     setCustomPersonality(String(char.customSettings?.personality || ''));
+    setSpeechAndBehavior(
+      char.speechAndBehavior ||
+        String(char.customSettings?.speechAndBehavior || char.customSettings?.greetingStyle || '')
+    );
+    setWorldView(resolvedWorldView);
     setCustomNote(String(char.customSettings?.note || ''));
+    setMigratedConflicts(conflicts);
     setFeedbackMsg(null);
   };
 
@@ -124,6 +274,16 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
     e.target.value = '';
   };
 
+  const handleMergeConflictingWorldView = (record: MigratedWorldViewRecord) => {
+    const parts: string[] = [];
+    if (record.worldView?.trim()) parts.push(record.worldView.trim());
+    if (record.relationships?.trim()) parts.push(`[관계 설정] ${record.relationships.trim()}`);
+    if (record.startingSituation?.trim()) parts.push(`[시작 상황] ${record.startingSituation.trim()}`);
+    const extraText = parts.join('\n');
+    setWorldView((prev) => (prev.trim() ? `${prev.trim()}\n\n${extraText}` : extraText));
+    setMigratedConflicts((prev) => prev.filter((item) => item.sourceId !== record.sourceId));
+  };
+
   const handleSaveCharacter = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -137,10 +297,15 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
         id: editingChar ? editingChar.id : `char-${now}-${Math.random().toString(36).substring(2, 6)}`,
         name: name.trim(),
         avatarAssetId,
-        systemPrompt: systemPrompt.trim() || `${name.trim()}의 기본 캐릭터 프롬프트입니다.`,
+        systemPrompt: systemPrompt.trim() || `${name.trim()}의 기본 캐릭터 설정입니다.`,
         description: description.trim() || '사용자 정의 AI 캐릭터',
+        speechAndBehavior: speechAndBehavior.trim(),
+        worldView: worldView.trim(),
+        migratedWorldViews: migratedConflicts,
         customSettings: {
+          ...(editingChar?.customSettings || {}),
           personality: customPersonality.trim(),
+          speechAndBehavior: speechAndBehavior.trim(),
           note: customNote.trim(),
         },
         createdAt: editingChar ? editingChar.createdAt : now,
@@ -156,7 +321,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
       setEditingChar(null);
       setFeedbackMsg({
         type: 'success',
-        text: `[${charToSave.name}] 캐릭터 정보가 IndexedDB "characters" 스토어에 안전하게 저장되었습니다.`,
+        text: `[${charToSave.name}] 캐릭터 정보, 말투/행동 특성 및 세계관 설정이 안전하게 저장되었습니다.`,
       });
     } catch (err) {
       setFeedbackMsg({
@@ -176,7 +341,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
       onDataChanged();
       setFeedbackMsg({
         type: 'info',
-        text: `[${deletedName}] 캐릭터 프로필이 삭제되었습니다. 데이터 보호 원칙에 따라 연결된 채팅방(${result.preservedRooms}개), 대화 메시지(${result.preservedMessages}건), 스토리 중요 기억(${result.preservedStories}건)은 삭제되지 않고 보존되었습니다.`,
+        text: `[${deletedName}] 캐릭터 프로필이 삭제되었습니다. 데이터 보호 원칙에 따라 연결된 채팅방(${result.preservedRooms}개), 대화 메시지(${result.preservedMessages}건), 추억의 한조각(${result.preservedStories}건)은 삭제되지 않고 보존되었습니다.`,
       });
     } catch (err) {
       setFeedbackMsg({
@@ -188,7 +353,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
 
   const handleExportCharacterJson = (char: Character) => {
     const exportPayload = {
-      format: 'lovy-character-v1',
+      format: 'lovy-character-v2',
       exportedAt: new Date().toISOString(),
       character: char,
     };
@@ -218,7 +383,10 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
         avatarAssetId: assetUrls[rawChar.avatarAssetId] ? rawChar.avatarAssetId : 'sample-luna-avatar',
         systemPrompt: String(rawChar.systemPrompt || ''),
         description: String(rawChar.description || ''),
-        customSettings: typeof rawChar.customSettings === 'object' && rawChar.customSettings ? rawChar.customSettings : {},
+        speechAndBehavior: String(rawChar.speechAndBehavior || rawChar.customSettings?.speechAndBehavior || ''),
+        worldView: String(rawChar.worldView || ''),
+        customSettings:
+          typeof rawChar.customSettings === 'object' && rawChar.customSettings ? rawChar.customSettings : {},
         createdAt: now,
         updatedAt: now,
         schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -245,9 +413,9 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-indigo-500/30 pb-4">
         <div>
-          <h2 className="text-xl font-bold text-white tracking-tight">캐릭터 등록 및 관리</h2>
+          <h2 className="text-xl font-bold text-white tracking-tight">캐릭터 생성 및 관리</h2>
           <p className="text-xs text-slate-400 mt-1">
-            캐릭터 데이터와 채팅·스토리 기록은 분리 저장되며, 캐릭터 삭제 시에도 기존 대화 및 스토리 기록은 자동 보존됩니다.
+            캐릭터 정보, 성격, 말투 및 행동 특성, 세계관 설정은 캐릭터에 귀속되며 모든 채팅방에서 자동으로 참조됩니다.
           </p>
         </div>
 
@@ -305,7 +473,249 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
         </div>
       )}
 
-      {/* Create / Edit Form Modal or Section */}
+      {/* Section 4: Dedicated 「나의 분신」 Management Area (Visually Distinct from AI Characters) */}
+      <section
+        ref={personaSectionRef}
+        className="p-5 rounded-2xl bg-gradient-to-br from-emerald-950/35 via-slate-900/95 to-pink-950/25 border-2 border-emerald-500/40 space-y-4 shadow-xl"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 pb-3.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center shrink-0">
+              <UserCircle2 size={20} className="text-emerald-300" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-extrabold text-white">나의 분신</h3>
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
+                  사용자 프로필
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                AI 캐릭터와 사회자가 당신을 알아볼 수 있도록 이야기 속에서 사용할 나의 분신을 관리합니다.
+              </p>
+            </div>
+          </div>
+
+          {!isEditingPersona && (
+            <button
+              type="button"
+              onClick={() => setIsEditingPersona(true)}
+              className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white flex items-center gap-1.5 shadow-lg shadow-emerald-600/20 shrink-0"
+            >
+              <Edit3 size={14} />
+              <span>{userProfile ? '나의 분신 수정' : '나의 분신 만들기'}</span>
+            </button>
+          )}
+        </div>
+
+        {isEditingPersona ? (
+          <form onSubmit={handleSavePersona} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-emerald-200 mb-1">
+                    이름 또는 닉네임 (필수) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={personaName}
+                    onChange={(e) => setPersonaName(e.target.value)}
+                    placeholder="캐릭터들이 부를 이름 또는 닉네임을 입력하세요"
+                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-slate-950 border border-emerald-500/40 text-xs text-white focus:outline-none focus:border-pink-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    프로필 이미지 (선택 · 로컬 표시 전용, 매 대화 API에 전송되지 않음)
+                  </label>
+                  <div className="flex items-center gap-2.5">
+                    {personaAvatarId !== 'none' && assetUrls[personaAvatarId] ? (
+                      <img
+                        src={assetUrls[personaAvatarId]}
+                        alt="나의 분신 프로필"
+                        referrerPolicy="no-referrer"
+                        className="w-11 h-11 rounded-xl border border-emerald-400/50 object-cover shrink-0"
+                      />
+                    ) : (
+                      <div className="w-11 h-11 rounded-xl border border-slate-700 bg-slate-950 flex items-center justify-center text-[10px] text-slate-500 shrink-0">
+                        미선택
+                      </div>
+                    )}
+                    <select
+                      value={personaAvatarId}
+                      onChange={(e) => setPersonaAvatarId(e.target.value)}
+                      className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none"
+                    >
+                      <option value="none">선택 안 함 (빈 상태 유지)</option>
+                      {avatarAssets.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      ref={personaFileInputRef}
+                      type="file"
+                      accept="image/png,image/webp,image/gif,image/jpeg,image/svg+xml"
+                      onChange={handleUploadPersonaAvatar}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => personaFileInputRef.current?.click()}
+                      className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 text-xs text-emerald-200 flex items-center gap-1 shrink-0"
+                    >
+                      <Upload size={13} />
+                      <span>이미지 등록</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    외모 (선택)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={personaAppearance}
+                    onChange={(e) => setPersonaAppearance(e.target.value)}
+                    placeholder="머리색, 분위기, 복장 등 외모 특징을 자유롭게 입력하세요 (비워두면 빈 상태 유지)"
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    성격 (선택)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={personaPersonality}
+                    onChange={(e) => setPersonaPersonality(e.target.value)}
+                    placeholder="성격이나 말투, 행동 스타일을 입력하세요 (비워두면 빈 상태 유지)"
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    자기소개 및 추가 설정 (선택)
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={personaBioAndExtra}
+                    onChange={(e) => setPersonaBioAndExtra(e.target.value)}
+                    placeholder="실제 자신의 모습이나 세계관 속 직업·배경·취향 등을 자유롭게 입력하세요 (입력하지 않은 정보는 AI가 임의로 확정하지 않습니다)"
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
+              <span className="text-[11px] text-slate-400">
+                입력하지 않은 선택 항목은 빈 상태로 유지되며, 프로필 이미지는 대화 API에 전송되지 않습니다.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingPersona(false)}
+                  className="min-h-[38px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-[38px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white flex items-center gap-1.5"
+                >
+                  <Save size={14} />
+                  <span>나의 분신 저장</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        ) : userProfile ? (
+          <div className="p-4 rounded-xl bg-slate-950/80 border border-emerald-500/25 flex flex-col sm:flex-row items-start gap-4">
+            {userProfile.avatarAssetId && assetUrls[userProfile.avatarAssetId] ? (
+              <img
+                src={assetUrls[userProfile.avatarAssetId]}
+                alt={userProfile.name}
+                referrerPolicy="no-referrer"
+                className="w-16 h-16 rounded-2xl border border-emerald-400/50 object-cover shrink-0"
+              />
+            ) : (
+              <div className="w-16 h-16 rounded-2xl border border-emerald-500/30 bg-emerald-950/40 flex items-center justify-center shrink-0">
+                <UserCircle2 size={28} className="text-emerald-300" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0 space-y-2 text-xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-base font-bold text-white">{userProfile.name}</span>
+                <span className="text-[11px] text-emerald-300">· 모든 AI 캐릭터 및 사회자가 참조 중</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {userProfile.appearance?.trim() && (
+                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
+                    <div className="text-[11px] font-semibold text-emerald-300">외모</div>
+                    <p className="text-slate-200 mt-0.5 whitespace-pre-line leading-relaxed">
+                      {userProfile.appearance}
+                    </p>
+                  </div>
+                )}
+                {userProfile.personality?.trim() && (
+                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
+                    <div className="text-[11px] font-semibold text-pink-300">성격</div>
+                    <p className="text-slate-200 mt-0.5 whitespace-pre-line leading-relaxed">
+                      {userProfile.personality}
+                    </p>
+                  </div>
+                )}
+              </div>
+              {(userProfile.bio?.trim() || userProfile.additionalInfo?.trim()) && (
+                <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
+                  <div className="text-[11px] font-semibold text-sky-300">자기소개 및 추가 설정</div>
+                  <p className="text-slate-200 mt-0.5 whitespace-pre-line leading-relaxed">
+                    {[userProfile.bio, userProfile.additionalInfo].filter(Boolean).join('\n\n')}
+                  </p>
+                </div>
+              )}
+              {!userProfile.appearance?.trim() &&
+                !userProfile.personality?.trim() &&
+                !userProfile.bio?.trim() &&
+                !userProfile.additionalInfo?.trim() && (
+                  <p className="text-slate-400">
+                    추가 선택 항목은 비어 있습니다. 필요 시 우측의 [나의 분신 수정]에서 자유롭게 입력할 수 있습니다.
+                  </p>
+                )}
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 rounded-xl bg-slate-950/70 border border-dashed border-emerald-500/35 text-xs text-slate-300 flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="font-bold text-white">아직 등록된 나의 분신이 없습니다.</div>
+              <p className="text-slate-400">
+                실제 AI 캐릭터와 대화를 시작하기 전에 이름 또는 닉네임을 등록해 주세요. 안내 라비는 분신 없이도 이용할 수 있습니다.
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Visual Separator between 「나의 분신」 and AI Characters */}
+      <div className="flex items-center justify-between pt-2 border-t border-indigo-500/25">
+        <div>
+          <h3 className="text-sm font-bold text-indigo-200">AI 캐릭터 및 안내 라비 목록</h3>
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            등록된 AI 캐릭터({characters.filter((c) => c.id !== GUIDE_RAVI_ID).length}명) 및 시스템 안내 도우미 라비
+          </p>
+        </div>
+      </div>
+
+      {/* Create / Edit Form Section */}
       {(isCreating || editingChar) && (
         <form
           onSubmit={handleSaveCharacter}
@@ -313,7 +723,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
         >
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <h3 className="text-base font-bold text-white">
-              {isCreating ? '새 AI 캐릭터 등록' : `캐릭터 수정: ${editingChar?.name}`}
+              {isCreating ? '새 AI 캐릭터 생성' : `캐릭터 설정 수정: ${editingChar?.name}`}
             </h3>
             <button
               type="button"
@@ -328,7 +738,8 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-3">
+            {/* Left Column: Name, Profile Image, Summary & Personality */}
+            <div className="space-y-3.5">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">캐릭터 이름 *</label>
                 <input
@@ -342,19 +753,8 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">한 줄 설명 (캐릭터 소개)</label>
-                <input
-                  type="text"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="예: 사이버 시티의 해커 토끼 동료"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-indigo-500/30 text-sm text-white focus:outline-none focus:border-pink-500"
-                />
-              </div>
-
-              <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  프로필 이미지 에셋 선택 (assets 스토어 ID 참조)
+                  프로필 이미지 (assets 스토어 ID 참조)
                 </label>
                 <div className="flex items-center gap-3">
                   <img
@@ -387,29 +787,40 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
                     className="min-h-[40px] px-3 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 border border-indigo-500/40 text-xs text-indigo-200 flex items-center gap-1 shrink-0"
                   >
                     <Upload size={13} />
-                    <span>PNG 등록</span>
+                    <span>이미지 등록</span>
                   </button>
                 </div>
               </div>
-            </div>
 
-            <div className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  기본 프롬프트 (캐릭터 성격·말투·커뮤니티 공용 프롬프트)
+                  한 줄 소개 (캐릭터 요약)
+                </label>
+                <input
+                  type="text"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="예: 사이버 시티의 해커 토끼 동료"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-indigo-500/30 text-xs text-white focus:outline-none focus:border-pink-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  캐릭터 정보 및 성격 (상세 배경·성격·특징)
                 </label>
                 <textarea
                   rows={3}
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
-                  placeholder="캐릭터의 기본 성격, 말투, 배경 설정을 입력하세요. (향후 채팅 및 커뮤니티 댓글 작성에 공용으로 활용됩니다)"
+                  placeholder="캐릭터의 상세 정보, 성격, 가치관, 좋아하는 것 등을 자유롭게 입력하세요."
                   className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-indigo-500/30 text-xs text-white focus:outline-none focus:border-pink-500"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">사용자 지정 설정: 성격 키워드</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">성격 키워드 (선택)</label>
                   <input
                     type="text"
                     value={customPersonality}
@@ -419,7 +830,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">사용자 지정 설정: 메모</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">추가 메모 (선택)</label>
                   <input
                     type="text"
                     value={customNote}
@@ -429,6 +840,70 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
                   />
                 </div>
               </div>
+            </div>
+
+            {/* Right Column: Speech & Behavior Characteristics + WorldView Setting */}
+            <div className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+                  <Sparkles size={13} className="text-pink-400" />
+                  <span>말투 및 행동 특성</span>
+                </label>
+                <textarea
+                  rows={4}
+                  value={speechAndBehavior}
+                  onChange={(e) => setSpeechAndBehavior(e.target.value)}
+                  placeholder="캐릭터의 말투(반말/존댓말, 말버릇, 어조)와 자주 하는 행동, 표정, 습관 등을 입력하세요."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-indigo-500/30 text-xs text-white focus:outline-none focus:border-pink-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+                  <Globe size={13} className="text-sky-400" />
+                  <span>세계관 설정 (캐릭터 귀속 · 채팅방 자동 참조)</span>
+                </label>
+                <textarea
+                  rows={6}
+                  value={worldView}
+                  onChange={(e) => setWorldView(e.target.value)}
+                  placeholder="캐릭터가 속한 세계관, 시대적 배경, 주요 장소, 사용자와의 기본 관계 및 시작 상황 등을 입력하세요."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-indigo-500/30 text-xs text-white focus:outline-none focus:border-pink-500"
+                />
+              </div>
+
+              {/* Conflict preservation box if legacy chatroom settings differed from character worldView */}
+              {migratedConflicts.length > 0 && (
+                <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 space-y-2 text-xs">
+                  <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <AlertTriangle size={14} />
+                    <span>기존 채팅방에서 이전된 다른 세계관 설정 보존됨 (임의 덮어쓰기 방지)</span>
+                  </div>
+                  {migratedConflicts.map((rec) => (
+                    <div
+                      key={rec.sourceId}
+                      className="p-2.5 rounded-lg bg-slate-950/90 border border-amber-500/30 space-y-1.5"
+                    >
+                      <p className="text-slate-200 whitespace-pre-line">{rec.worldView}</p>
+                      {rec.relationships && (
+                        <p className="text-slate-300">• 관계: {rec.relationships}</p>
+                      )}
+                      {rec.startingSituation && (
+                        <p className="text-slate-300">• 시작 상황: {rec.startingSituation}</p>
+                      )}
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleMergeConflictingWorldView(rec)}
+                          className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-semibold text-white"
+                        >
+                          현재 세계관 아래에 병합
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -464,9 +939,11 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
                 [{deleteTarget.name}] 캐릭터를 삭제하시겠습니까? (데이터 보존 정책 안내)
               </h4>
               <p className="text-xs text-slate-300 leading-relaxed">
-                러비러비톡 데이터 보호 정책(지시서 3항)에 따라, 캐릭터를 삭제하더라도 해당 캐릭터와 나눈{' '}
-                <strong className="text-amber-300">채팅 기록, 채팅방, 스토리 모드 중요 기억, 커뮤니티 작성 글은 자동 삭제되지 않고 안전하게 보존</strong>됩니다.
-                삭제된 캐릭터를 참조하는 기존 채팅방은 [삭제된 캐릭터 (기록 보존됨)] 상태로 오류 없이 열람할 수 있습니다.
+                러비러비톡 데이터 보호 정책에 따라, 캐릭터를 삭제하더라도 해당 캐릭터와 나눈{' '}
+                <strong className="text-amber-300">
+                  채팅 기록, 채팅방, 추억의 한조각, 커뮤니티 작성 글은 자동 삭제되지 않고 안전하게 보존
+                </strong>
+                됩니다.
               </p>
             </div>
           </div>
@@ -495,6 +972,9 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
         {characters.map((char) => {
           const isGuide = char.id === GUIDE_RAVI_ID || char.isSystemGuide;
           const avatarSrc = assetUrls[char.avatarAssetId] || DEFAULT_AVATARS.ravi;
+          const speechText =
+            char.speechAndBehavior ||
+            String(char.customSettings?.speechAndBehavior || char.customSettings?.greetingStyle || '');
 
           return (
             <div
@@ -525,15 +1005,31 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
                       </div>
                       <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">{char.description}</p>
                       <div className="text-[11px] text-slate-500 font-mono mt-1 tabular-nums">
-                        ID: {char.id} · v{char.schemaVersion} · Asset: {char.avatarAssetId}
+                        ID: {char.id} · v{char.schemaVersion}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 text-xs text-slate-300 space-y-1.5">
-                  <div className="font-semibold text-indigo-300 text-[11px]">기본 프롬프트</div>
-                  <p className="line-clamp-2 text-slate-300 leading-relaxed">{char.systemPrompt}</p>
+                <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 text-xs text-slate-300 space-y-2">
+                  <div>
+                    <div className="font-semibold text-indigo-300 text-[11px]">캐릭터 정보 및 성격</div>
+                    <p className="line-clamp-2 text-slate-300 leading-relaxed mt-0.5">{char.systemPrompt}</p>
+                  </div>
+
+                  {speechText && (
+                    <div className="pt-1.5 border-t border-slate-800/80">
+                      <div className="font-semibold text-pink-300 text-[11px]">말투 및 행동 특성</div>
+                      <p className="line-clamp-2 text-slate-300 leading-relaxed mt-0.5">{speechText}</p>
+                    </div>
+                  )}
+
+                  {char.worldView && (
+                    <div className="pt-1.5 border-t border-slate-800/80">
+                      <div className="font-semibold text-sky-300 text-[11px]">세계관 설정</div>
+                      <p className="line-clamp-2 text-slate-300 leading-relaxed mt-0.5">{char.worldView}</p>
+                    </div>
+                  )}
                 </div>
               </div>
 

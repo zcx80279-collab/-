@@ -9,6 +9,7 @@ import {
   CommunityItem,
   CustomizationSettings,
   AppSettings,
+  UserProfile,
   Asset,
   CURRENT_SCHEMA_VERSION,
   GUIDE_RAVI_ID,
@@ -54,7 +55,7 @@ export interface LovyDB extends DBSchema {
   };
   settings: {
     key: string;
-    value: CustomizationSettings | AppSettings;
+    value: CustomizationSettings | AppSettings | UserProfile;
   };
 }
 
@@ -66,13 +67,13 @@ let dbPromise: Promise<IDBPDatabase<LovyDB>> | null = null;
 export async function getDb(): Promise<IDBPDatabase<LovyDB>> {
   if (!dbPromise) {
     dbPromise = openDB<LovyDB>(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion, newVersion, transaction) {
+      upgrade(db, _oldVersion, _newVersion, transaction) {
         // 1. characters store
         if (!db.objectStoreNames.contains('characters')) {
           const charStore = db.createObjectStore('characters', { keyPath: 'id' });
           charStore.createIndex('by-updated', 'updatedAt');
         }
-        // 2. rooms store (Allowed by spec section 8: "필요한 경우 별도의 채팅방 스토어를 추가할 수 있다.")
+        // 2. rooms store
         if (!db.objectStoreNames.contains('rooms')) {
           const roomStore = db.createObjectStore('rooms', { keyPath: 'id' });
           roomStore.createIndex('by-character', 'characterId');
@@ -94,7 +95,7 @@ export async function getDb(): Promise<IDBPDatabase<LovyDB>> {
           const storyStore = db.createObjectStore('stories', { keyPath: 'id' });
           storyStore.createIndex('by-character', 'characterId');
         }
-        // 5. community store (Exact name required by Section 8 table: "community" | 게시글 및 댓글)
+        // 5. community store
         if (!db.objectStoreNames.contains('community')) {
           const commStore = db.createObjectStore('community', { keyPath: 'id' });
           commStore.createIndex('by-type', 'recordType');
@@ -136,7 +137,6 @@ export async function computeContentHash(data: string | ArrayBuffer): Promise<st
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   } catch {
-    // Fallback deterministic simple hash if crypto.subtle is unavailable
     const str = typeof data === 'string' ? data : new Uint8Array(data).subarray(0, 256).join(',');
     let h = 0;
     for (let i = 0; i < str.length; i++) {
@@ -168,6 +168,91 @@ export function dataUrlToBlob(dataUrl: string): Blob {
   }
 }
 
+function buildCombinedLegacyWorldView(story: StoryMemory): string {
+  const parts: string[] = [];
+  if (story.worldView?.trim()) {
+    parts.push(story.worldView.trim());
+  }
+  if (story.relationships?.trim()) {
+    parts.push(`[관계 설정] ${story.relationships.trim()}`);
+  }
+  if (story.startingSituation?.trim()) {
+    parts.push(`[시작 상황] ${story.startingSituation.trim()}`);
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Safely migrates legacy chatroom story settings (worldView, relationships, startingSituation)
+ * into the owning Character record without losing data or arbitrarily overwriting conflicting settings.
+ */
+export async function migrateLegacyStorySettingsToCharacters(db: IDBPDatabase<LovyDB>): Promise<void> {
+  const [characters, stories] = await Promise.all([
+    db.getAll('characters'),
+    db.getAll('stories'),
+  ]);
+
+  const charMap = new Map<string, Character>();
+  for (const c of characters) {
+    charMap.set(c.id, c);
+  }
+
+  for (const story of stories) {
+    if (story.characterId === GUIDE_RAVI_ID) continue;
+    const char = charMap.get(story.characterId);
+    if (!char) continue;
+
+    const legacyText = buildCombinedLegacyWorldView(story);
+    let charModified = false;
+
+    // Also migrate legacy customSettings speech/behavior fields if speechAndBehavior is not yet populated
+    if (!char.speechAndBehavior) {
+      const legacySpeech =
+        String(char.customSettings?.speechAndBehavior || char.customSettings?.greetingStyle || '').trim();
+      if (legacySpeech) {
+        char.speechAndBehavior = legacySpeech;
+        charModified = true;
+      }
+    }
+
+    if (legacyText && !story.migratedToCharacter) {
+      const currentCharWorld = (char.worldView || '').trim();
+      if (!currentCharWorld) {
+        // Character has no worldView yet -> directly assign without loss
+        char.worldView = legacyText;
+        charModified = true;
+      } else if (currentCharWorld !== legacyText && !currentCharWorld.includes(legacyText)) {
+        // Conflict detected: character already has a different worldView.
+        // Do NOT arbitrarily overwrite char.worldView; preserve the conflicting room/story setting in migratedWorldViews.
+        const existingMigrated = char.migratedWorldViews || [];
+        const alreadyRecorded = existingMigrated.some(
+          (m) => m.worldView === story.worldView && m.relationships === story.relationships
+        );
+        if (!alreadyRecorded) {
+          char.migratedWorldViews = [
+            ...existingMigrated,
+            {
+              sourceId: story.id,
+              worldView: story.worldView,
+              relationships: story.relationships,
+              startingSituation: story.startingSituation,
+              migratedAt: Date.now(),
+            },
+          ];
+          charModified = true;
+        }
+      }
+
+      story.migratedToCharacter = true;
+      await db.put('stories', story);
+    }
+
+    if (charModified) {
+      await db.put('characters', char);
+    }
+  }
+}
+
 /**
  * Seed initial required data safely without overwriting or deleting existing user data.
  */
@@ -191,18 +276,24 @@ export async function seedInitialData(): Promise<void> {
     await db.put('settings', initialCustom);
   }
 
-  const appSettings = await db.get('settings', 'app_settings');
+  const appSettings = (await db.get('settings', 'app_settings')) as AppSettings | undefined;
   if (!appSettings) {
     const initialApp: AppSettings = {
       id: 'app_settings',
       soundEnabled: true,
+      narratorEnabled: true,
       aiImageGenerationEnabled: false,
       autoCleanupDays: 3,
-      autoCleanupEnabled: false, // Phase 1: not activated automatically
+      autoCleanupEnabled: false,
       schemaVersion: CURRENT_SCHEMA_VERSION,
       updatedAt: Date.now(),
     };
     await db.put('settings', initialApp);
+  } else if (typeof appSettings.narratorEnabled !== 'boolean') {
+    await db.put('settings', {
+      ...appSettings,
+      narratorEnabled: true,
+    });
   }
 
   // 2. Default Assets in 'assets' store (with Blob + contentHash)
@@ -329,6 +420,8 @@ export async function seedInitialData(): Promise<void> {
     avatarAssetId: 'guide-ravi-avatar',
     systemPrompt: '[시스템 고정 안내 봇] AI API 호출 및 자유 대화 생성이 비활성화된 사전 등록 선택지 전용 안내 캐릭터입니다.',
     description: '러비러비톡 최초 실행 시 자동 등록되는 공식 선택지형 안내 봇입니다. (삭제 및 설정 수정 불가)',
+    speechAndBehavior: '정중하고 명확한 시스템 안내 톤',
+    worldView: '러비러비톡 공식 안내 채널',
     customSettings: {
       role: 'system_guide',
       allowFreeChat: false,
@@ -373,6 +466,8 @@ export async function seedInitialData(): Promise<void> {
         avatarAssetId: 'sample-luna-avatar',
         systemPrompt: '장난기 넘치고 호기심 많은 사이버 고양이 루나입니다. 네온 시티의 골목과 디지털 가젯을 좋아합니다.',
         description: '네온 시티를 여행하는 호기심 많은 사이버 고양이 캐릭터입니다.',
+        speechAndBehavior: '친근한 반말과 존댓말을 섞어 쓰며, 흥미로운 이야기를 들으면 귀를 쫑긋거리는 행동 특성이 있습니다.',
+        worldView: '네온빛 홀로그램과 궤도 엘리베이터가 공존하는 22세기 사이버 메트로폴리스. 사용자와는 비밀 네트워크에서 처음 만난 신뢰하는 파트너입니다.',
         customSettings: {
           personality: '활발함, 호기심',
           greetingStyle: '친근한 반말/존댓말 혼합',
@@ -387,6 +482,8 @@ export async function seedInitialData(): Promise<void> {
         avatarAssetId: 'sample-astro-avatar',
         systemPrompt: '은하계를 탐사하는 차분하고 다정한 우주 탐험가 아스트로입니다. 별자리와 우주 항해 기록을 수집합니다.',
         description: '별들과 우주를 사랑하는 차분한 우주 탐험가 캐릭터입니다.',
+        speechAndBehavior: '차분하고 다정한 존댓말을 사용하며, 생각에 잠길 때 하늘이나 별자리를 올려다보는 습관이 있습니다.',
+        worldView: '은하계 외곽 궤도 정거장과 성간 탐사선이 오가는 우주 개척 시대. 사용자와 함께 미지의 성단을 기록하고 탐사합니다.',
         customSettings: {
           personality: '차분함, 다정함',
           specialty: '천체 관측 및 항해 기록',
@@ -408,20 +505,22 @@ export async function seedInitialData(): Promise<void> {
         createdAt: char.createdAt,
         updatedAt: char.updatedAt,
       });
+      // Requirement 3: Do NOT auto-generate example or default memories in keyMemories
       await db.put('stories', {
         id: `story-${char.id}`,
         characterId: char.id,
-        worldView: '네온빛 홀로그램과 궤도 엘리베이터가 공존하는 22세기 사이버 메트로폴리스',
-        relationships: '사용자와는 비밀 네트워크에서 처음 만난 신뢰하는 파트너',
-        startingSituation: '비 내리는 네온 스트리트의 사이버 카페 창가 자리에서 첫 브리핑을 시작하는 상황',
-        keyMemories: [
-          '사용자가 처음 캐릭터를 등록하고 스토리 세계관을 초기화함.',
-          '중요 기억은 AI가 임의로 수정하지 않으며 사용자가 직접 관리함.',
-        ],
+        worldView: char.worldView || '',
+        relationships: '',
+        startingSituation: '',
+        keyMemories: [],
+        migratedToCharacter: true,
         updatedAt: now,
         schemaVersion: CURRENT_SCHEMA_VERSION,
       });
     }
+  } else {
+    // Migrate existing character story settings safely without data loss or arbitrary overwrite
+    await migrateLegacyStorySettingsToCharacters(db);
   }
 
   // 5. Sample Community Posts & Comments in 'community' store (clearly marked isExample: true)

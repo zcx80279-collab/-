@@ -5,7 +5,7 @@ import { DEFAULT_AVATARS } from '../core/defaultAssets';
 import { ShieldCheck, HelpCircle, FolderOpen, Lock, CheckCircle2, MessageSquare } from 'lucide-react';
 
 interface GuideRaviChatProps {
-  onNavigateTab: (tab: 'chat' | 'community' | 'characters' | 'customization' | 'settings' | 'report') => void;
+  onNavigateTab: (tab: 'chat' | 'community' | 'characters' | 'settings' | 'report') => void;
 }
 
 export interface GuideOption {
@@ -26,10 +26,10 @@ export const GUIDE_RAVI_OPTIONS: GuideOption[] = [
     number: 1,
     title: '러비러비톡 기본 사용법',
     answer:
-      '러비러비톡(Lovy Lovy Talk) 1단계 기초 앱에 오신 것을 환영합니다!\n\n' +
-      '• 좌측(모바일은 하단/전환 메뉴)에서 [채팅], [커뮤니티], [캐릭터 관리], [PNG 꾸미기], [환경설정], [1단계 검수 보고서] 화면으로 이동할 수 있습니다.\n' +
-      '• 모든 데이터는 브라우저 내장 IndexedDB(lovy_lovy_talk_db)에 안전하게 로컬 저장되며 새로고침 후에도 그대로 유지됩니다.\n' +
-      '• 1단계에서는 데이터 안정성과 커스터마이징 골격 검증을 위해 AI 응답 자동 생성을 호출하지 않으며, 사용자가 입력한 메시지와 설정을 정확히 보존합니다.',
+      '러비러비톡(Lovy Lovy Talk)에 오신 것을 환영합니다!\n\n' +
+      '• 상단(모바일은 하단) 메뉴에서 [채팅방], [커뮤니티], [캐릭터 관리], [환경설정] 화면으로 이동할 수 있습니다.\n' +
+      '• [캐릭터 관리] 상단에서 「나의 분신」을 등록하면 AI 캐릭터와 사회자가 당신을 인식하며 이야기를 이어갑니다.\n' +
+      '• 모든 데이터는 브라우저 내장 IndexedDB(lovy_lovy_talk_db)에 안전하게 로컬 저장되며 새로고침 후에도 그대로 유지됩니다.',
   },
   {
     id: 'ravi-opt-2',
@@ -65,12 +65,12 @@ export const GUIDE_RAVI_OPTIONS: GuideOption[] = [
     number: 5,
     title: 'PNG 파일 위치 및 교체 방법',
     answer:
-      '[PNG 꾸미기] 메뉴에서 외부 프레임(9-slice 테두리)과 채팅방 배경 이미지를 자유롭게 교체하고 복원할 수 있습니다.\n\n' +
+      '각 채팅방 우측 상단의 [설정 아이콘] → [PNG 꾸미기] 탭에서 채팅방별 배경, 외부 프레임(9-slice), 말풍선 스타일, 컬러 테마를 독립적으로 교체하고 복원할 수 있습니다.\n\n' +
       '• 실제 코드 및 에셋 저장 위치:\n' +
       '  - 기본 내장 에셋 정의: /src/core/defaultAssets.ts\n' +
-      '  - 스킨 관리 모듈: /src/customization/CustomizationPanel.tsx\n' +
+      '  - 채팅방 설정 및 스킨 관리 모듈: /src/chat/ChatRoomSettingsModal.tsx\n' +
       '  - 런타임 바이너리 저장소: IndexedDB "lovy_lovy_talk_db" 내 "assets" 오브젝트 스토어 (Blob + SHA-256 콘텐츠 해시 중복 방지)\n' +
-      '• 투명 배경 PNG, WebP, GIF, SVG 파일을 업로드하면 즉시 "assets" 스토어에 등록되며, 스킨을 변경하거나 기본값으로 복원해도 채팅 기록과 캐릭터 데이터는 절대 손실되지 않습니다.',
+      '• 투명 배경 PNG, WebP, GIF, SVG 파일을 업로드하면 즉시 "assets" 스토어에 등록되며, 한 채팅방의 배경이나 프레임을 변경해도 다른 채팅방이나 채팅 기록에는 영향을 주지 않습니다.',
   },
   {
     id: 'ravi-opt-6',
@@ -207,11 +207,11 @@ export const GuideRaviChat: React.FC<GuideRaviChatProps> = ({ onNavigateTab }) =
           </div>
           <button
             type="button"
-            onClick={() => onNavigateTab('customization')}
+            onClick={() => onNavigateTab('characters')}
             className="text-xs text-sky-400 hover:text-sky-300 font-medium flex items-center gap-1 transition-colors whitespace-nowrap shrink-0"
           >
             <FolderOpen size={13} />
-            <span>PNG 꾸미기 화면 바로가기</span>
+            <span>캐릭터 관리 · 나의 분신 바로가기</span>
           </button>
         </div>
 

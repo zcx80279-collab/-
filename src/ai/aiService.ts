@@ -1,23 +1,31 @@
-import { Character, ChatMode, Message, StoryMemory } from '../core/types';
+import {
+  Character,
+  ChatMode,
+  Message,
+  MessageSegment,
+  NarratorSceneType,
+  RoomCharacterPromptOverride,
+  StoryMemory,
+  UserProfile,
+} from '../core/types';
 
-/**
- * Phase 1 AI Layer Interface (Future Expansion Hook)
- *
- * Per Section 0, 5, 6, 13 of the specification:
- * - Phase 1 strictly separates the AI communication layer as an interface without executing live AI API calls.
- * - Never generates fake AI replies or pretends AI generation is active in Phase 1.
- */
 export interface AiChatRequest {
   character: Character;
+  roomPromptOverride?: RoomCharacterPromptOverride | null;
+  userProfile?: UserProfile | null;
   mode: ChatMode;
   history: Message[];
-  storyMemory?: StoryMemory;
+  storyMemory?: StoryMemory | null;
+  makjangMode?: boolean;
+  currentSceneType?: NarratorSceneType;
   userMessage: string;
 }
 
 export interface AiChatResponse {
-  implemented: boolean;
-  statusMessage: string;
+  narratorEnabled: boolean;
+  makjangMode: boolean;
+  sceneType: NarratorSceneType;
+  segments: MessageSegment[];
 }
 
 export const COMMUNITY_RANDOM_TOPICS: string[] = [
@@ -29,20 +37,154 @@ export const COMMUNITY_RANDOM_TOPICS: string[] = [
 ];
 
 export const aiService = {
-  isPhase1Stub: true,
+  isPhase1Stub: false,
 
   getLayerStatus() {
     return {
-      phase: '1단계 기초 골격 (인터페이스 분리 완료 / 실제 API 호출 비활성화)',
-      chatGenerationConnected: false,
+      phase: '2차 추가 개선 패치: 자동 사회자 · 채팅방별 설정 · 막장 모드 단일 API 연동 완료',
+      chatGenerationConnected: true,
       communityAutoPostConnected: false,
       imageGenerationConnected: false,
-      note: '1단계 지시서에 따라 AI 응답 생성 및 가짜 응답 생성을 수행하지 않습니다. 후속 단계에서 Gemini API와 연결됩니다.',
+      note: '일반 사회자 자동 판단 또는 채팅방별 막장 모드 연출, 장면 묘사 및 캐릭터 대사를 단일 API 호출로 처리하며, 채팅방별 프롬프트 수정값은 원본과 중복 전송하지 않고 빈 추억의 한조각·프로필 이미지는 API 요청에서 제외합니다.',
     };
   },
 
   pickRandomCommunityTopic(): string {
     const idx = Math.floor(Math.random() * COMMUNITY_RANDOM_TOPICS.length);
     return COMMUNITY_RANDOM_TOPICS[idx];
+  },
+
+  /**
+   * Executes a single API call to generate scene routing / Makjang narration
+   * and character dialogue response.
+   *
+   * Token & Privacy Optimizations:
+   * - Never sends profile avatar image data to the API.
+   * - Omits empty optional "나의 분신" user profile fields.
+   * - Completely omits `keyMemories` ("추억의 한조각") from payload if empty.
+   * - Resolves room prompt overrides once so original and override prompts are never duplicated.
+   * - Local `makjangMode` flag ensures Makjang prompt is sent ONLY when enabled for this room.
+   */
+  async generateChatResponse(req: AiChatRequest): Promise<AiChatResponse> {
+    const {
+      character,
+      roomPromptOverride,
+      userProfile,
+      mode,
+      history,
+      storyMemory,
+      makjangMode = false,
+      currentSceneType = 'daily',
+      userMessage,
+    } = req;
+
+    const characterPayload: Record<string, string> = {
+      name: character.name,
+    };
+    if (character.description?.trim()) {
+      characterPayload.description = character.description.trim();
+    }
+
+    // Resolve character info & personality: room override takes precedence without duplicating original
+    const overrideInfo = roomPromptOverride?.characterInfoAndPersonality?.trim();
+    if (overrideInfo) {
+      characterPayload.systemPrompt = overrideInfo;
+    } else {
+      if (character.systemPrompt?.trim()) {
+        characterPayload.systemPrompt = character.systemPrompt.trim();
+      }
+      const personality = String(character.customSettings?.personality || '').trim();
+      if (personality) {
+        characterPayload.personality = personality;
+      }
+    }
+
+    // Resolve speech & behavior: room override takes precedence without duplicating original
+    const overrideSpeech = roomPromptOverride?.speechAndBehavior?.trim();
+    const resolvedSpeech =
+      overrideSpeech ||
+      (
+        character.speechAndBehavior ||
+        String(character.customSettings?.speechAndBehavior || character.customSettings?.greetingStyle || '')
+      ).trim();
+    if (resolvedSpeech) {
+      characterPayload.speechAndBehavior = resolvedSpeech;
+    }
+
+    // Resolve worldview: room override takes precedence without duplicating original
+    const overrideWorldView = roomPromptOverride?.worldView?.trim();
+    const resolvedWorldView =
+      overrideWorldView || (character.worldView || storyMemory?.worldView || '').trim();
+    if (resolvedWorldView) {
+      characterPayload.worldView = resolvedWorldView;
+    }
+
+    // Build userProfile ("나의 분신") payload without avatarAssetId/image data and without empty optional fields
+    let userProfilePayload:
+      | {
+          name: string;
+          appearance?: string;
+          personality?: string;
+          bio?: string;
+          additionalInfo?: string;
+        }
+      | undefined;
+    if (userProfile && userProfile.name?.trim()) {
+      userProfilePayload = {
+        name: userProfile.name.trim(),
+      };
+      if (userProfile.appearance?.trim()) {
+        userProfilePayload.appearance = userProfile.appearance.trim();
+      }
+      if (userProfile.personality?.trim()) {
+        userProfilePayload.personality = userProfile.personality.trim();
+      }
+      if (userProfile.bio?.trim()) {
+        userProfilePayload.bio = userProfile.bio.trim();
+      }
+      if (userProfile.additionalInfo?.trim()) {
+        userProfilePayload.additionalInfo = userProfile.additionalInfo.trim();
+      }
+    }
+
+    // Only include keyMemories ("추억의 한조각") if non-empty
+    const nonEmptyMemories = (storyMemory?.keyMemories || [])
+      .map((m) => m.trim())
+      .filter(Boolean);
+
+    const requestPayload: Record<string, unknown> = {
+      character: characterPayload,
+      makjangMode: Boolean(makjangMode),
+      currentSceneType,
+      mode,
+      history: history.slice(-10).map((m) => ({
+        sender: m.sender,
+        content: m.content,
+        segments: m.segments,
+      })),
+      userMessage: userMessage.trim(),
+    };
+
+    if (userProfilePayload) {
+      requestPayload.userProfile = userProfilePayload;
+    }
+    if (nonEmptyMemories.length > 0) {
+      requestPayload.keyMemories = nonEmptyMemories;
+    }
+
+    const response = await fetch('/api/chat/respond', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestPayload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'AI 응답 생성 요청에 실패했습니다.');
+    }
+
+    return data as AiChatResponse;
   },
 };

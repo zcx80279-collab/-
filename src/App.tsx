@@ -4,6 +4,7 @@ import {
   ChatRoom,
   CustomizationSettings,
   AppSettings,
+  UserProfile,
   ThemeMode,
   GUIDE_RAVI_ID,
 } from './core/types';
@@ -13,22 +14,22 @@ import { DEFAULT_AVATARS, DEFAULT_FRAMES, DEFAULT_CHAT_BACKGROUNDS } from './cor
 import { ChatWorkspace } from './chat/ChatWorkspace';
 import { CommunityFeed } from './community/CommunityFeed';
 import { CharacterManager } from './characters/CharacterManager';
-import { CustomizationPanel } from './customization/CustomizationPanel';
 import { SettingsPanel } from './core/SettingsPanel';
 import { VerificationReportModal } from './core/VerificationReportModal';
 import {
   MessageSquare,
   Users,
   Globe,
-  Palette,
   Settings,
-  FileCheck2,
   Plus,
   BookOpen,
   ShieldAlert,
+  Sparkles,
+  UserCircle2,
+  Flame,
 } from 'lucide-react';
 
-type ActiveTab = 'chat' | 'community' | 'characters' | 'customization' | 'settings' | 'report';
+type ActiveTab = 'chat' | 'community' | 'characters' | 'settings' | 'report';
 
 const THEME_WRAPPER_CLASSES: Record<ThemeMode, string> = {
   'dark-indigo': 'bg-[#090b1a] text-slate-100',
@@ -47,6 +48,14 @@ export default function App() {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
+  // Section 2: First-Run Welcome Notice Modal (shown once on first launch only)
+  const [showFirstRunWelcome, setShowFirstRunWelcome] = useState(false);
+
+  // Section 3: User Persona Creation Prompt Modal (shown only when starting actual AI character chat without persona)
+  const [showPersonaPromptModal, setShowPersonaPromptModal] = useState(false);
+  const [autoOpenPersonaEditor, setAutoOpenPersonaEditor] = useState(false);
 
   const [customization, setCustomization] = useState<CustomizationSettings>({
     id: 'customization',
@@ -62,10 +71,11 @@ export default function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>({
     id: 'app_settings',
     soundEnabled: true,
+    narratorEnabled: true,
     aiImageGenerationEnabled: false,
     autoCleanupDays: 3,
     autoCleanupEnabled: false,
-    schemaVersion: 1,
+    schemaVersion: 2,
     updatedAt: Date.now(),
   });
 
@@ -92,19 +102,35 @@ export default function App() {
     }
   };
 
-  const reloadAllState = async (selectFirstRoomIfNone = false) => {
-    const [loadedChars, loadedRooms, loadedAssets, loadedCustom, loadedApp] = await Promise.all([
-      storageService.getAllCharacters(),
-      storageService.getAllRooms(),
-      storageService.getAllAssets(),
-      storageService.getCustomizationSettings(),
-      storageService.getAppSettings(),
-    ]);
+  const reloadAllState = async (isInitialLoad = false) => {
+    const [loadedChars, loadedRooms, loadedAssets, loadedCustom, loadedApp, loadedProfile] =
+      await Promise.all([
+        storageService.getAllCharacters(),
+        storageService.getAllRooms(),
+        storageService.getAllAssets(),
+        storageService.getCustomizationSettings(),
+        storageService.getAppSettings(),
+        storageService.getUserProfile(),
+      ]);
 
     setCharacters(loadedChars);
     setRooms(loadedRooms);
     setCustomization(loadedCustom);
     setAppSettings(loadedApp);
+    setUserProfile(loadedProfile);
+
+    if (isInitialLoad) {
+      // Existing users who already registered a profile should not be forced through first-run welcome again
+      if (loadedProfile) {
+        if (!loadedApp.welcomeSeen) {
+          const updated = await storageService.saveAppSettings({ welcomeSeen: true });
+          setAppSettings(updated);
+        }
+        setShowFirstRunWelcome(false);
+      } else if (!loadedApp.welcomeSeen) {
+        setShowFirstRunWelcome(true);
+      }
+    }
 
     const urlMap: Record<string, string> = {};
     for (const a of loadedAssets) {
@@ -112,8 +138,11 @@ export default function App() {
     }
     setAssetUrls(urlMap);
 
-    if (selectFirstRoomIfNone && loadedRooms.length > 0 && !activeRoomId) {
-      setActiveRoomId(loadedRooms[0].id);
+    if (isInitialLoad && loadedRooms.length > 0 && !activeRoomId) {
+      const guideRoom = !loadedProfile
+        ? loadedRooms.find((r) => r.characterId === GUIDE_RAVI_ID)
+        : null;
+      setActiveRoomId(guideRoom ? guideRoom.id : loadedRooms[0].id);
     }
     if (loadedChars.length > 0 && !newRoomCharId) {
       const nonGuide = loadedChars.find((c) => c.id !== GUIDE_RAVI_ID) || loadedChars[0];
@@ -128,7 +157,29 @@ export default function App() {
 
   const activeRoom = rooms.find((r) => r.id === activeRoomId) || rooms[0] || null;
 
+  const handleDismissWelcome = async (targetTab: ActiveTab) => {
+    const updated = await storageService.saveAppSettings({ welcomeSeen: true });
+    setAppSettings(updated);
+    setShowFirstRunWelcome(false);
+    setActiveTab(targetTab);
+  };
+
+  const handleSelectRoom = (room: ChatRoom) => {
+    // Guide Ravi is always accessible without user profile or API key
+    if (room.characterId !== GUIDE_RAVI_ID && !userProfile) {
+      setShowPersonaPromptModal(true);
+      return;
+    }
+    setActiveRoomId(room.id);
+    setActiveTab('chat');
+    setMobileChatView('room');
+  };
+
   const handleOpenChatWithCharacter = async (characterId: string) => {
+    if (characterId !== GUIDE_RAVI_ID && !userProfile) {
+      setShowPersonaPromptModal(true);
+      return;
+    }
     const existingRoom = rooms.find((r) => r.characterId === characterId);
     if (existingRoom) {
       setActiveRoomId(existingRoom.id);
@@ -144,6 +195,11 @@ export default function App() {
   const handleCreateNewRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomCharId) return;
+    if (newRoomCharId !== GUIDE_RAVI_ID && !userProfile) {
+      setShowNewRoomModal(false);
+      setShowPersonaPromptModal(true);
+      return;
+    }
     const created = await storageService.createChatRoom(newRoomCharId, newRoomTitle, newRoomMode);
     setShowNewRoomModal(false);
     setNewRoomTitle('');
@@ -151,6 +207,12 @@ export default function App() {
     setActiveRoomId(created.id);
     setActiveTab('chat');
     setMobileChatView('room');
+  };
+
+  const handleGoCreatePersona = () => {
+    setShowPersonaPromptModal(false);
+    setAutoOpenPersonaEditor(true);
+    setActiveTab('characters');
   };
 
   if (initError) {
@@ -178,25 +240,35 @@ export default function App() {
     );
   }
 
+  // Per-room PNG customization resolution (falls back to existing global customization defaults)
+  const roomCustom = activeTab === 'chat' ? activeRoom?.customization : undefined;
+  const effectiveTheme: ThemeMode = roomCustom?.theme ?? customization.theme;
+  const effectiveFrameAssetId =
+    roomCustom?.frameAssetId !== undefined ? roomCustom.frameAssetId : customization.frameAssetId;
+  const effectiveChatBgAssetId =
+    activeRoom?.customization?.chatBackgroundAssetId !== undefined
+      ? activeRoom.customization.chatBackgroundAssetId
+      : customization.chatBackgroundAssetId;
+  const effectiveBubbleStyle = activeRoom?.customization?.bubbleStyle ?? customization.bubbleStyle;
+
   const frameOverlayUrl =
-    customization.frameAssetId && customization.frameAssetId !== 'none'
-      ? assetUrls[customization.frameAssetId] || DEFAULT_FRAMES.cyberIndigo
+    effectiveFrameAssetId && effectiveFrameAssetId !== 'none'
+      ? assetUrls[effectiveFrameAssetId] || DEFAULT_FRAMES.cyberIndigo
       : '';
 
   const chatBgUrl =
-    customization.chatBackgroundAssetId && customization.chatBackgroundAssetId !== 'none'
-      ? assetUrls[customization.chatBackgroundAssetId] || DEFAULT_CHAT_BACKGROUNDS.darkNight
+    effectiveChatBgAssetId && effectiveChatBgAssetId !== 'none'
+      ? assetUrls[effectiveChatBgAssetId] || DEFAULT_CHAT_BACKGROUNDS.darkNight
       : '';
 
   return (
     <div
       className={`h-screen w-screen overflow-hidden flex flex-col select-none sm:select-auto ${
-        THEME_WRAPPER_CLASSES[customization.theme] || THEME_WRAPPER_CLASSES['dark-indigo']
+        THEME_WRAPPER_CLASSES[effectiveTheme] || THEME_WRAPPER_CLASSES['dark-indigo']
       }`}
     >
-      {/* Top Bar Contract: 3 Zones separated by gap-8 */}
+      {/* Top Bar: Wordmark, 4 Main Menus (채팅방, 커뮤니티, 캐릭터 관리, 환경설정), and Report */}
       <header className="h-14 px-4 sm:px-6 bg-slate-950/90 backdrop-blur-md border-b border-indigo-500/30 flex items-center justify-between gap-8 shrink-0 z-30">
-        {/* Zone 1: Single text element wordmark */}
         <a
           href="#top"
           onClick={(e) => {
@@ -208,7 +280,6 @@ export default function App() {
           러비러비톡 Lovy Lovy Talk
         </a>
 
-        {/* Zone 2: 5 concise single-line text navigation links */}
         <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-slate-300">
           <button
             type="button"
@@ -245,17 +316,6 @@ export default function App() {
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('customization')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'customization'
-                ? 'text-pink-400 underline underline-offset-8 decoration-2'
-                : 'hover:text-white'
-            }`}
-          >
-            PNG 꾸미기
-          </button>
-          <button
-            type="button"
             onClick={() => setActiveTab('settings')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
               activeTab === 'settings'
@@ -267,7 +327,6 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Zone 3: 1 primary action */}
         <div className="flex items-center shrink-0">
           <button
             type="button"
@@ -278,14 +337,13 @@ export default function App() {
                 : 'bg-indigo-600 hover:bg-indigo-500 text-white'
             }`}
           >
-            1단계 검수 보고서
+            검수 보고서
           </button>
         </div>
       </header>
 
-      {/* Main Workspace with 9-Slice External Frame Skin Overlay */}
+      {/* Main Workspace with Per-Room 9-Slice External Frame Skin Overlay */}
       <div className="flex-1 min-h-0 flex relative overflow-hidden p-1.5 sm:p-2.5">
-        {/* 9-Slice External Frame Decoration Overlay (pointer-events-none so it never blocks functional buttons) */}
         {frameOverlayUrl && (
           <div
             aria-hidden="true"
@@ -303,7 +361,7 @@ export default function App() {
         )}
 
         <div className="flex-1 min-h-0 flex rounded-2xl overflow-hidden border border-indigo-500/30 bg-slate-950/60 backdrop-blur-md relative z-10">
-          {/* Left Sidebar: Characters & Chat Rooms List (Discord-inspired layout) */}
+          {/* Left Sidebar: Characters & Chat Rooms List */}
           <aside
             className={`${
               activeTab === 'chat'
@@ -371,11 +429,7 @@ export default function App() {
                   <button
                     key={room.id}
                     type="button"
-                    onClick={() => {
-                      setActiveRoomId(room.id);
-                      setActiveTab('chat');
-                      setMobileChatView('room');
-                    }}
+                    onClick={() => handleSelectRoom(room)}
                     className={`w-full min-h-[56px] p-2.5 rounded-xl border text-left transition-all flex items-center gap-3 ${
                       isSelected
                         ? 'bg-indigo-950/90 border-pink-500/60 text-white shadow-md'
@@ -390,8 +444,15 @@ export default function App() {
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-1">
-                        <span className="text-xs font-bold text-white truncate">
-                          {room.title || (char ? `${char.name} 대화방` : '삭제된 캐릭터 대화방')}
+                        <span className="text-xs font-bold text-white truncate flex items-center gap-1">
+                          <span className="truncate">
+                            {room.title || (char ? `${char.name} 대화방` : '삭제된 캐릭터 대화방')}
+                          </span>
+                          {room.makjangMode && (
+                            <span title="막장 모드 활성화됨" className="inline-flex items-center shrink-0">
+                              <Flame size={11} className="text-red-400" />
+                            </span>
+                          )}
                         </span>
                         <span className="text-[10px] text-slate-400 shrink-0">
                           {isGuide
@@ -424,8 +485,11 @@ export default function App() {
                 activeRoom={activeRoom}
                 charactersMap={charactersMap}
                 assetUrls={assetUrls}
+                globalCustomization={customization}
                 chatBackgroundUrl={chatBgUrl}
-                bubbleStyle={customization.bubbleStyle}
+                bubbleStyle={effectiveBubbleStyle}
+                userProfile={userProfile}
+                onRequireUserProfile={() => setShowPersonaPromptModal(true)}
                 onRoomUpdated={() => reloadAllState()}
                 onNavigateTab={(tab) => setActiveTab(tab)}
                 onBackToMobileList={() => setMobileChatView('list')}
@@ -443,18 +507,12 @@ export default function App() {
 
             {activeTab === 'characters' && (
               <CharacterManager
+                userProfile={userProfile}
+                autoOpenPersonaEditor={autoOpenPersonaEditor}
+                onPersonaEditorHandled={() => setAutoOpenPersonaEditor(false)}
+                onUserProfileUpdated={(updatedProfile) => setUserProfile(updatedProfile)}
                 onOpenChatWithCharacter={handleOpenChatWithCharacter}
                 onDataChanged={() => reloadAllState()}
-              />
-            )}
-
-            {activeTab === 'customization' && (
-              <CustomizationPanel
-                customization={customization}
-                onCustomizationSaved={(updated) => {
-                  setCustomization(updated);
-                  reloadAllState();
-                }}
               />
             )}
 
@@ -462,6 +520,7 @@ export default function App() {
               <SettingsPanel
                 appSettings={appSettings}
                 onSettingsUpdated={(updated) => setAppSettings(updated)}
+                onNavigateCharacters={() => setActiveTab('characters')}
               />
             )}
 
@@ -470,8 +529,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* Mobile Bottom Navigation Bar (Natural Thumb Zone, <= 15% sticky height cap) */}
-      <nav className="md:hidden h-14 bg-slate-950/95 border-t border-indigo-500/30 grid grid-cols-5 items-center shrink-0 z-30">
+      {/* Mobile Bottom Navigation Bar (4 Main Tabs: 채팅, 커뮤니티, 캐릭터, 설정) */}
+      <nav className="md:hidden h-14 bg-slate-950/95 border-t border-indigo-500/30 grid grid-cols-4 items-center shrink-0 z-30">
         <button
           type="button"
           onClick={() => {
@@ -483,7 +542,7 @@ export default function App() {
           }`}
         >
           <MessageSquare size={17} />
-          <span className="mt-0.5">채팅</span>
+          <span className="mt-0.5">채팅방</span>
         </button>
         <button
           type="button"
@@ -503,17 +562,7 @@ export default function App() {
           }`}
         >
           <Users size={17} />
-          <span className="mt-0.5">캐릭터</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('customization')}
-          className={`h-full flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'customization' ? 'text-pink-400' : 'text-slate-400'
-          }`}
-        >
-          <Palette size={17} />
-          <span className="mt-0.5">꾸미기</span>
+          <span className="mt-0.5">캐릭터 관리</span>
         </button>
         <button
           type="button"
@@ -523,9 +572,99 @@ export default function App() {
           }`}
         >
           <Settings size={17} />
-          <span className="mt-0.5">설정</span>
+          <span className="mt-0.5">환경설정</span>
         </button>
       </nav>
+
+      {/* Section 2: First-Run Welcome Notice Modal (Shown Once on Initial Run) */}
+      {showFirstRunWelcome && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-lg p-6 rounded-2xl bg-slate-900 border-2 border-pink-500/50 space-y-5 shadow-2xl">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-pink-500/20 text-pink-300 text-xs font-semibold">
+                <Sparkles size={13} />
+                <span>환영 안내문</span>
+              </div>
+              <h3 className="text-lg sm:text-xl font-extrabold text-white">
+                러비러비톡에 오신 것을 환영합니다!
+              </h3>
+            </div>
+
+            <div className="space-y-3 text-xs sm:text-sm text-slate-200 leading-relaxed">
+              <p>
+                러비러비톡은 AI 캐릭터와 자유롭게 대화하고 이야기를 만들어가는 채팅 앱입니다.
+              </p>
+              <p>
+                처음 이용하시는 분은 환경설정에서 API 키를 등록한 후 이용해 주세요.
+              </p>
+              <p>
+                프로그램의 기능이나 사용 방법이 궁금하시다면 안내 도우미 라비에게 질문해 주세요. 라비가 이용 방법을 친절하게 안내해 드립니다.
+              </p>
+              <p className="font-semibold text-pink-200">
+                러비러비톡에서 당신만의 이야기를 시작해 보세요!
+              </p>
+            </div>
+
+            <div className="pt-2 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleDismissWelcome('chat')}
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-100"
+              >
+                둘러보기
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDismissWelcome('settings')}
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-bold text-white shadow-lg shadow-pink-600/30"
+              >
+                설정으로 이동
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Section 3: Persona Creation Prompt Modal (Shown only when starting real AI character chat without persona) */}
+      {showPersonaPromptModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md p-6 rounded-2xl bg-slate-900 border-2 border-emerald-500/50 space-y-5 shadow-2xl">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 text-xs font-semibold">
+                <UserCircle2 size={14} />
+                <span>나의 분신 안내</span>
+              </div>
+              <h3 className="text-lg font-extrabold text-white">당신은 어떤 사람인가요?</h3>
+            </div>
+
+            <div className="space-y-2.5 text-xs sm:text-sm text-slate-200 leading-relaxed">
+              <p>
+                캐릭터들이 당신을 알아볼 수 있도록 이야기 속에서 사용할 나의 분신을 만들어 주세요.
+              </p>
+              <p>
+                실제 자신의 모습을 소개하거나 새로운 세계관 속 인물이 되어도 좋습니다.
+              </p>
+            </div>
+
+            <div className="pt-2 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowPersonaPromptModal(false)}
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200"
+              >
+                돌아가기
+              </button>
+              <button
+                type="button"
+                onClick={handleGoCreatePersona}
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-lg shadow-emerald-600/30"
+              >
+                나의 분신 만들기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create New Chat Room Modal */}
       {showNewRoomModal && (
