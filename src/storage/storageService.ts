@@ -560,6 +560,17 @@ export const storageService = {
     return post;
   },
 
+  async addCommunityLike(postId: string): Promise<void> {
+    const db = await getDb();
+    const tx = db.transaction('community', 'readwrite');
+    const item = await tx.store.get(postId);
+    if (item?.recordType === 'post' && item.post) {
+      item.post.likes = (item.post.likes ?? 0) + 1;
+      await tx.store.put(item);
+    }
+    await tx.done;
+  },
+
   async addCommunityComment(commentData: Omit<CommunityComment, 'id' | 'createdAt'>): Promise<CommunityComment> {
     const db = await getDb();
     const now = Date.now();

@@ -660,8 +660,18 @@ export default function App() {
             }
           />
         </div>
+      ) : activeTab === 'community' ? (
+        <CommunityFeed
+          characters={characters}
+          assetUrls={assetUrls}
+          appSettings={appSettings}
+          onAssetsUpdated={() => reloadAllState()}
+          onNavigate={(tab) => {
+            if (tab === 'chat') setMobileChatView('list');
+            setActiveTab(tab);
+          }}
+        />
       ) : (
-        /* OTHER EXISTING PAGES (Community, CharacterManager, Settings, Report) - Design Preserved Unchanged */
         <>
           <header className="h-14 px-4 sm:px-6 bg-slate-950/90 backdrop-blur-md border-b border-indigo-500/30 flex items-center justify-between gap-8 shrink-0 z-30">
             <a
@@ -686,11 +696,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab('community')}
-                className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeTab === 'community'
-                    ? 'text-pink-400 underline underline-offset-8 decoration-2'
-                    : 'hover:text-white'
-                }`}
+                className="py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer hover:text-white"
               >
                 커뮤니티
               </button>
@@ -734,15 +740,6 @@ export default function App() {
           </header>
 
           <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {activeTab === 'community' && (
-              <CommunityFeed
-                characters={characters}
-                assetUrls={assetUrls}
-                appSettings={appSettings}
-                onAssetsUpdated={() => reloadAllState()}
-              />
-            )}
-
             {activeTab === 'characters' && (
               <CharacterManager
                 userProfile={userProfile}
@@ -768,7 +765,7 @@ export default function App() {
       )}
 
       {/* Mobile Bottom Navigation Bar (4 Main Tabs: 채팅방, 커뮤니티, 캐릭터 관리, 환경설정) */}
-      <nav className="md:hidden h-14 bg-[#0b061a]/95 border-t border-fuchsia-500/35 grid grid-cols-4 items-center shrink-0 z-30">
+      {activeTab !== 'community' && <nav className="md:hidden h-14 bg-[#0b061a]/95 border-t border-fuchsia-500/35 grid grid-cols-4 items-center shrink-0 z-30">
         <button
           type="button"
           onClick={() => {
@@ -785,9 +782,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('community')}
-          className={`h-full flex flex-col items-center justify-center text-[10px] font-semibold ${
-            activeTab === 'community' ? 'text-fuchsia-400' : 'text-slate-400'
-          }`}
+          className="h-full flex flex-col items-center justify-center text-[10px] font-semibold text-slate-400"
         >
           <Globe size={17} />
           <span className="mt-0.5">커뮤니티</span>
@@ -812,7 +807,7 @@ export default function App() {
           <Settings size={17} />
           <span className="mt-0.5">환경설정</span>
         </button>
-      </nav>
+      </nav>}
 
       {/* Floating Screen Settings & PNG Customization Popup (Slider Icon) */}
       <ScreenSettingsPopup

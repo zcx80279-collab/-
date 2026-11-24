@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import {
   CommunityPost,
   CommunityComment,
@@ -9,25 +9,25 @@ import {
 import { storageService } from '../storage/storageService';
 import { COMMUNITY_RANDOM_TOPICS } from '../ai/aiService';
 import { DEFAULT_AVATARS } from '../core/defaultAssets';
-import {
-  MessageCircle,
-  Heart,
-  Image as ImageIcon,
-  PlusCircle,
-  Trash2,
-  ArrowLeft,
-  Send,
-  Upload,
-  Sparkles,
-  CheckCircle2,
-  Filter,
-} from 'lucide-react';
+import { Image as ImageIcon, Upload } from 'lucide-react';
+import { CommunitySidebar } from './CommunitySidebar';
+import { CommunitySkinProvider, SkinDivider, SkinFrame, SkinIcon, SkinPanel } from './CommunitySkin';
+import type { CommunitySkinOverrides } from './CommunitySkin';
+import { officialTag, postTags, searchablePostText, tagLabel } from './communityTags';
+import './community.css';
+
+const navigation = [
+  ['chat', '채팅방'], ['community', '커뮤니티'], ['characters', '캐릭터 관리'], ['settings', '환경설정'],
+] as const;
+type CommunityDestination = (typeof navigation)[number][0];
 
 interface CommunityFeedProps {
   characters: Character[];
   assetUrls: Record<string, string>;
   appSettings: AppSettings | null;
   onAssetsUpdated: () => void;
+  onNavigate: (tab: CommunityDestination) => void;
+  skinOverrides?: CommunitySkinOverrides;
 }
 
 export const CommunityFeed: React.FC<CommunityFeedProps> = ({
@@ -35,11 +35,19 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   assetUrls,
   appSettings,
   onAssetsUpdated,
+  onNavigate,
+  skinOverrides,
 }) => {
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [commentsByPost, setCommentsByPost] = useState<Record<string, CommunityComment[]>>({});
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [filterMode, setFilterMode] = useState<'all' | 'user' | 'example'>('all');
+
+  const [query, setQuery] = useState('');
+  const [tagFilter, setTagFilter] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [openTool, setOpenTool] = useState<'search' | 'filter' | null>(null);
+  const [liking, setLiking] = useState(false);
 
   // New Post Form (For user data verification vs example data)
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -55,6 +63,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const [commentText, setCommentText] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  const mainRef = useRef<HTMLDivElement>(null);
+  const feedRef = useRef<HTMLDivElement>(null);
+  const scrollPosition = useRef({ main: 0, feed: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -143,107 +154,143 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     );
   };
 
-  const filteredPosts = posts.filter((p) => {
-    if (filterMode === 'user') return !p.isExample;
-    if (filterMode === 'example') return p.isExample;
-    return true;
+  const chooseTag = (tag: string) => {
+    setTagFilter(tag);
+    setSelectedPostId(null);
+  };
+
+  const trimmedQuery = query.trim().normalize('NFC').toLocaleLowerCase();
+  const searchedTag = officialTag(trimmedQuery);
+  const filteredPosts = posts.filter((post) => {
+    if (filterMode === 'user' && post.isExample) return false;
+    if (filterMode === 'example' && !post.isExample) return false;
+    const tags = postTags(post).official;
+    if (tagFilter && !tags.includes(tagFilter)) return false;
+    if (!trimmedQuery) return true;
+    if (trimmedQuery.startsWith('#') || searchedTag) {
+      return Boolean(searchedTag && tags.includes(searchedTag));
+    }
+    return searchablePostText(post).includes(trimmedQuery) ||
+      tags.some((tag) => tag.toLocaleLowerCase().includes(trimmedQuery));
   });
 
-  const selectedPost = posts.find((p) => p.id === selectedPostId) || null;
-  const selectedComments = selectedPost ? commentsByPost[selectedPost.id] || [] : [];
+  const selectedPost = posts.find((post) => post.id === selectedPostId);
+  const selectedComments = selectedPost ? commentsByPost[selectedPost.id] ?? [] : [];
+  const popular = [...posts].sort((a, b) => b.likes - a.likes || b.createdAt - a.createdAt).slice(0, 5);
+  const today = new Date().toDateString();
+  const tagCounts = new Map<string, number>();
+  for (const post of posts) {
+    if (new Date(post.createdAt).toDateString() !== today) continue;
+    for (const tag of postTags(post).official) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  }
+  const todaysTags = [...tagCounts].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
+
+  useLayoutEffect(() => {
+    if (selectedPost || showCreateForm) return;
+    if (mainRef.current) mainRef.current.scrollTop = scrollPosition.current.main;
+    if (feedRef.current) feedRef.current.scrollTop = scrollPosition.current.feed;
+  }, [selectedPost?.id, showCreateForm]);
+
+  function showPost(id: string) {
+    scrollPosition.current = {
+      main: mainRef.current?.scrollTop ?? 0,
+      feed: feedRef.current?.scrollTop ?? 0,
+    };
+    setCommentText('');
+    setSelectedPostId(id);
+  }
+
+  async function likePost(id: string) {
+    setLiking(true);
+    try {
+      await storageService.addCommunityLike(id);
+      await loadCommunityData();
+    } catch {
+      setStatusMessage('좋아요를 저장할 수 없습니다.');
+    } finally {
+      setLiking(false);
+    }
+  }
+
+  const author = (name: string, avatar: string, createdAt: number) => (
+    <div className="community-author">
+      <img src={assetUrls[avatar] || DEFAULT_AVATARS.luna} alt="" referrerPolicy="no-referrer" />
+      <div><strong>{name}</strong><time dateTime={new Date(createdAt).toISOString()}>
+        {new Date(createdAt).toLocaleString('ko-KR')}
+      </time></div>
+    </div>
+  );
+
+  const attachment = (post: CommunityPost) => {
+    const src = post.imageAssetId && assetUrls[post.imageAssetId];
+    return src ? <img className="community-attachment" src={src} alt={post.title + ' 첨부 이미지'} referrerPolicy="no-referrer" /> : null;
+  };
+
+  const tagsOf = (post: CommunityPost) => {
+    const { official, free } = postTags(post);
+    return (official.length > 0 || free.length > 0) && (
+      <div className="community-tags">
+        {official.map((tag) => <button key={tag} type="button" onClick={() => chooseTag(tag)}>{tagLabel(tag)}</button>)}
+        {free.map((tag) => <span key={tag}>{tag}</span>)}
+      </div>
+    );
+  };
+
+  const focusBack = useCallback((button: HTMLButtonElement | null) => {
+    button?.focus({ preventScroll: true });
+  }, []);
+  const toggleTool = (tool: 'search' | 'filter') => setOpenTool(openTool === tool ? null : tool);
 
   return (
-    <div className="flex flex-col h-full bg-slate-950/75 text-slate-100 overflow-y-auto p-4 sm:p-6 space-y-5">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-indigo-500/30 pb-4">
-        <div>
-          <h2 className="text-xl font-bold text-white tracking-tight">AI 캐릭터 가상 커뮤니티</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            AI 캐릭터들이 활동하는 가상 SNS입니다. 1단계에서는 자동 생성 API를 호출하지 않으며, 예시 데이터와 실제 사용자 데이터를 명확히 분리합니다.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleDeleteExamplesOnly}
-            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-red-950/60 border border-slate-700 hover:border-red-500/40 text-xs font-medium text-slate-300 hover:text-red-200 flex items-center gap-1.5 transition-colors whitespace-nowrap"
-          >
-            <Trash2 size={13} />
-            <span>예시 데이터만 일괄 삭제 (사용자 데이터 보존)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowCreateForm(!showCreateForm)}
-            className="min-h-[40px] px-4 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-semibold text-white flex items-center gap-1.5 shadow-lg shadow-pink-600/20 transition-colors whitespace-nowrap"
-          >
-            <PlusCircle size={15} />
-            <span>수동 게시글 작성 (사용자 데이터)</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Status Notice */}
-      {statusMessage && (
-        <div className="p-3.5 rounded-xl bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 size={15} className="text-sky-400 shrink-0" />
-            <span>{statusMessage}</span>
+    <CommunitySkinProvider overrides={skinOverrides}>
+      <section className="community-shell" aria-label="커뮤니티">
+        <SkinFrame />
+        <header className="community-toolbar">
+          <div>
+            <button type="button" aria-label="이동 메뉴" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><SkinIcon id="menu" /></button>
+            <button type="button" aria-label="게시글 작성" aria-expanded={showCreateForm} onClick={() => {
+              setOpenTool(null);
+              setShowCreateForm(!showCreateForm);
+            }}><SkinIcon id="compose" /></button>
           </div>
-          <button
-            type="button"
-            onClick={() => setStatusMessage(null)}
-            className="text-slate-400 hover:text-white text-xs"
-          >
-            닫기
-          </button>
-        </div>
-      )}
-
-      {/* Filter Bar & Design Policy Notice */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 p-3 rounded-xl border border-indigo-500/20">
-        <div className="flex items-center gap-1.5">
-          <Filter size={14} className="text-indigo-400 mr-1" />
-          <button
-            type="button"
-            onClick={() => setFilterMode('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              filterMode === 'all' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            전체 게시글 ({posts.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilterMode('user')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              filterMode === 'user' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            사용자 데이터 ({posts.filter((p) => !p.isExample).length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilterMode('example')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              filterMode === 'example' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            화면 확인용 예시 데이터 ({posts.filter((p) => p.isExample).length})
-          </button>
-        </div>
-
-        <div className="text-xs text-slate-400 flex items-center gap-2">
-          <Sparkles size={13} className="text-pink-400" />
-          <span>
-            AI 이미지 생성 설정: <strong className="text-slate-200">{appSettings?.aiImageGenerationEnabled ? 'ON (후속 단계 연동)' : 'OFF (1단계 기본값)'}</strong>
-          </span>
-        </div>
-      </div>
-
-      {/* Create Post Form */}
-      {showCreateForm && (
+          <div>
+            <button type="button" aria-label="검색" aria-expanded={openTool === 'search'} onClick={() => toggleTool('search')}><SkinIcon id="search" /></button>
+            <button type="button" aria-label="분류" aria-expanded={openTool === 'filter'} onClick={() => toggleTool('filter')}><SkinIcon id="filter" /></button>
+          </div>
+        </header>
+        <div className="community-content">
+          {openTool && (
+            <div className="community-tools">
+              {openTool === 'search' ? (
+                <input type="search" aria-label="게시글 및 공식 해시태그 검색" placeholder="게시글 및 공식 해시태그 검색"
+                  value={query} autoFocus onChange={(event) => { setQuery(event.target.value); setSelectedPostId(null); }} />
+              ) : (
+                <>
+                  <select aria-label="게시글 종류" value={filterMode} onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === 'all' || value === 'user' || value === 'example') setFilterMode(value);
+                    setSelectedPostId(null);
+                  }}>
+                    <option value="all">전체 게시글</option>
+                    <option value="user">사용자 게시글</option>
+                    <option value="example">예시 게시글</option>
+                  </select>
+                  <select aria-label="공식 해시태그" value={tagFilter} onChange={(event) => chooseTag(event.target.value)}>
+                    <option value="">모든 공식 해시태그</option>
+                    {COMMUNITY_RANDOM_TOPICS.map((tag) => <option value={tag} key={tag}>{tagLabel(tag)}</option>)}
+                  </select>
+                  <button type="button" onClick={handleDeleteExamplesOnly}>예시 데이터만 일괄 삭제</button>
+                  <span>AI 이미지 생성 설정 {appSettings?.aiImageGenerationEnabled ? 'ON' : 'OFF'}</span>
+                </>
+              )}
+              <button type="button" onClick={() => setOpenTool(null)}>닫기</button>
+            </div>
+          )}
+          {statusMessage && <div className="community-tools" role="status">
+            <span>{statusMessage}</span><button type="button" onClick={() => setStatusMessage(null)}>닫기</button>
+          </div>}
+          {showCreateForm && (
+            <div className="community-compose">
         <form
           onSubmit={handleCreatePost}
           className="p-5 rounded-2xl bg-slate-900/95 border border-pink-500/40 space-y-4 shadow-xl"
@@ -375,224 +422,92 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             </button>
           </div>
         </form>
-      )}
-
-      {/* Main Content: Detail View or List View */}
-      {selectedPost ? (
-        <div className="p-5 rounded-2xl bg-slate-900/95 border border-indigo-500/30 space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-            <button
-              type="button"
-              onClick={() => setSelectedPostId(null)}
-              className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5"
-            >
-              <ArrowLeft size={14} />
-              <span>게시글 목록으로 돌아가기</span>
-            </button>
-
-            <div className="flex items-center gap-2 text-xs">
-              <span className={selectedPost.isExample ? 'text-amber-300 font-semibold' : 'text-emerald-300 font-semibold'}>
-                {selectedPost.isExample ? '화면 확인용 예시 데이터' : '사용자 생성 데이터'}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="text-slate-400">주제: {selectedPost.topic}</span>
             </div>
-          </div>
-
-          {/* Author & Title */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <img
-                src={assetUrls[selectedPost.authorAvatarAssetId] || DEFAULT_AVATARS.luna}
-                alt={selectedPost.authorName}
-                referrerPolicy="no-referrer"
-                className="w-11 h-11 rounded-xl border border-indigo-400/40 object-cover"
-              />
-              <div>
-                <div className="text-sm font-bold text-white">{selectedPost.authorName}</div>
-                <div className="text-[11px] text-slate-400 tabular-nums">
-                  {new Date(selectedPost.createdAt).toLocaleString('ko-KR')} · 에셋 참조 ID:{' '}
-                  {selectedPost.imageAssetId || '없음'}
-                </div>
-              </div>
-            </div>
-
-            <h3 className="text-lg font-bold text-white">{selectedPost.title}</h3>
-            <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-line">{selectedPost.content}</p>
-
-            {/* Attached Image Display Area */}
-            {selectedPost.imageAssetId && assetUrls[selectedPost.imageAssetId] && (
-              <div className="pt-2">
-                <div className="rounded-2xl overflow-hidden border border-indigo-500/30 bg-slate-950 max-w-xl">
-                  <img
-                    src={assetUrls[selectedPost.imageAssetId]}
-                    alt={selectedPost.title}
-                    referrerPolicy="no-referrer"
-                    className="w-full max-h-80 object-cover"
-                  />
-                  <div className="px-3.5 py-2 bg-slate-950/90 text-[11px] text-slate-400 font-mono flex items-center justify-between">
-                    <span>첨부 이미지 에셋 ID: {selectedPost.imageAssetId}</span>
-                    <span>IndexedDB &quot;assets&quot; 스토어 참조</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Comments Section */}
-          <div className="pt-4 border-t border-slate-800 space-y-4">
-            <h4 className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
-              <MessageCircle size={14} />
-              <span>댓글 표시 영역 ({selectedComments.length}개)</span>
-            </h4>
-
-            <div className="space-y-2.5">
-              {selectedComments.length === 0 ? (
-                <p className="text-xs text-slate-500 py-3">아직 등록된 댓글이 없습니다.</p>
-              ) : (
-                selectedComments.map((comm) => (
-                  <div
-                    key={comm.id}
-                    className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 flex items-start gap-3"
-                  >
-                    <img
-                      src={assetUrls[comm.authorAvatarAssetId] || DEFAULT_AVATARS.astro}
-                      alt={comm.authorName}
-                      referrerPolicy="no-referrer"
-                      className="w-8 h-8 rounded-lg border border-indigo-500/30 object-cover shrink-0 mt-0.5"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-white">{comm.authorName}</span>
-                        <span className="text-[11px] text-slate-500 tabular-nums">
-                          {comm.isExample ? '예시 댓글' : '사용자 데이터'} ·{' '}
-                          {new Date(comm.createdAt).toLocaleTimeString('ko-KR', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-300 mt-1 leading-relaxed">{comm.content}</p>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Add Comment Form */}
-            <form onSubmit={handleAddComment} className="flex flex-wrap sm:flex-nowrap items-center gap-2 pt-2">
-              <select
-                value={commentAuthorId}
-                onChange={(e) => setCommentAuthorId(e.target.value)}
-                className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-950 border border-indigo-500/30 text-xs text-white shrink-0"
-              >
-                {characters.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder="댓글 내용을 입력하세요 (사용자 데이터로 저장됨)..."
-                className="flex-1 min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-950 border border-indigo-500/30 text-xs text-white focus:outline-none focus:border-pink-500"
-              />
-              <button
-                type="submit"
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white flex items-center gap-1.5 shrink-0"
-              >
-                <Send size={13} />
-                <span>댓글 등록</span>
-              </button>
-            </form>
-          </div>
-        </div>
-      ) : (
-        /* Posts List View */
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredPosts.length === 0 ? (
-            <div className="col-span-full p-8 rounded-2xl bg-slate-900/70 border border-slate-800 text-center space-y-2">
-              <p className="text-sm font-medium text-slate-300">표시할 커뮤니티 게시글이 없습니다.</p>
-              <p className="text-xs text-slate-500">
-                상단의 [수동 게시글 작성] 버튼을 눌러 사용자 데이터를 추가해 보세요.
-              </p>
-            </div>
-          ) : (
-            filteredPosts.map((post) => {
-              const postComments = commentsByPost[post.id] || [];
-              return (
-                <div
-                  key={post.id}
-                  onClick={() => setSelectedPostId(post.id)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') setSelectedPostId(post.id);
-                  }}
-                  className="p-5 rounded-2xl bg-slate-900/90 hover:bg-slate-900 border border-slate-800 hover:border-indigo-500/50 transition-all cursor-pointer flex flex-col justify-between gap-4 group"
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <img
-                          src={assetUrls[post.authorAvatarAssetId] || DEFAULT_AVATARS.luna}
-                          alt={post.authorName}
-                          referrerPolicy="no-referrer"
-                          className="w-9 h-9 rounded-xl border border-indigo-400/40 object-cover shrink-0"
-                        />
-                        <div className="min-w-0">
-                          <div className="font-bold text-white truncate">{post.authorName}</div>
-                          <div className="text-[11px] text-slate-400 truncate">주제: {post.topic}</div>
+          )}
+          <div ref={mainRef} className="community-main" hidden={Boolean(selectedPost) || showCreateForm}>
+            <SkinPanel id="feed" className="community-feed-panel">
+              <div ref={feedRef} className="community-feed-scroll" tabIndex={0} aria-label="게시글 목록">
+                {tagFilter && <button type="button" className="community-active-tag" onClick={() => chooseTag('')}>
+                  {tagLabel(tagFilter)} 해제
+                </button>}
+                <div className="community-card-grid">
+                  {filteredPosts.map((post) => (
+                    <SkinPanel id="post" className="community-card" key={post.id}>
+                      <article>
+                        <button type="button" className="community-open-post" onClick={() => showPost(post.id)} aria-label={`${post.title} 상세 보기`}>
+                          {author(post.authorName, post.authorAvatarAssetId, post.createdAt)}
+                          <h2>{post.title}</h2>
+                          <p className="line-clamp-3">{post.content}</p>
+                          {attachment(post)}
+                        </button>
+                        {tagsOf(post)}
+                        <SkinDivider />
+                        <div className="community-stats">
+                          <span className="community-meta" aria-label={`좋아요 ${post.likes}개`}><SkinIcon id="like" />{post.likes}</span>
+                          <span className="community-meta" aria-label={`댓글 ${commentsByPost[post.id]?.length ?? 0}개`}><SkinIcon id="comment" />{commentsByPost[post.id]?.length ?? 0}</span>
                         </div>
-                      </div>
-
-                      <span
-                        className={`text-[11px] font-semibold shrink-0 ${
-                          post.isExample ? 'text-amber-300' : 'text-emerald-300'
-                        }`}
-                      >
-                        {post.isExample ? '예시 데이터' : '사용자 데이터'}
-                      </span>
-                    </div>
-
-                    <h3 className="text-base font-bold text-white group-hover:text-pink-300 transition-colors">
-                      {post.title}
-                    </h3>
-                    <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">{post.content}</p>
-
-                    {post.imageAssetId && assetUrls[post.imageAssetId] && (
-                      <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-950 h-40">
-                        <img
-                          src={assetUrls[post.imageAssetId]}
-                          alt={post.title}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex items-center justify-between pt-3 border-t border-slate-800/80 text-xs text-slate-400 tabular-nums">
-                    <div className="flex items-center gap-4">
-                      <span className="flex items-center gap-1">
-                        <Heart size={13} className="text-pink-400" />
-                        {post.likes}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <MessageCircle size={13} className="text-sky-400" />
-                        댓글 {postComments.length}
-                      </span>
-                    </div>
-                    <span className="text-indigo-300 font-medium group-hover:underline">상세 및 댓글 보기 →</span>
-                  </div>
+                      </article>
+                    </SkinPanel>
+                  ))}
+                  {!filteredPosts.length && <p>표시할 게시글이 없습니다.</p>}
                 </div>
-              );
-            })
+              </div>
+            </SkinPanel>
+            <CommunitySidebar popular={popular} tags={todaysTags} onPost={showPost} onTag={chooseTag} />
+          </div>
+          {selectedPost && !showCreateForm && (
+            <section className="community-detail" aria-label="게시글 상세">
+              <button type="button" className="community-back" ref={focusBack} onClick={() => setSelectedPostId(null)}>← 게시글 목록으로 돌아가기</button>
+              <div className="community-detail-columns">
+                <SkinPanel id="post" className="community-detail-post">
+                  <article>
+                    {attachment(selectedPost)}
+                    {author(selectedPost.authorName, selectedPost.authorAvatarAssetId, selectedPost.createdAt)}
+                    <h1>{selectedPost.title}</h1>
+                    <p>{selectedPost.content}</p>
+                    {tagsOf(selectedPost)}
+                    <SkinDivider />
+                    <button className="community-meta" type="button" disabled={liking} onClick={() => likePost(selectedPost.id)} aria-label={`좋아요 ${selectedPost.likes}개`}>
+                      <SkinIcon id="like" />{selectedPost.likes}
+                    </button>
+                  </article>
+                </SkinPanel>
+                <SkinPanel id="sidebar" className="community-detail-comments">
+                  <h2 className="community-meta"><SkinIcon id="comment" />댓글 {selectedComments.length}</h2>
+                  <div className="community-comment-list" tabIndex={0} aria-label="댓글 목록">
+                    {selectedComments.map((comment) => <div key={comment.id} className="community-comment">
+                      {author(comment.authorName, comment.authorAvatarAssetId, comment.createdAt)}
+                      <p>{comment.content}</p>
+                    </div>)}
+                    {!selectedComments.length && <p>아직 등록된 댓글이 없습니다.</p>}
+                  </div>
+                  <form className="community-comment-form" onSubmit={handleAddComment}>
+                    <select aria-label="댓글 작성 캐릭터" value={commentAuthorId} onChange={(event) => setCommentAuthorId(event.target.value)}>
+                      {characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
+                    </select>
+                    <input aria-label="댓글 내용" placeholder="댓글을 입력하세요" value={commentText} onChange={(event) => setCommentText(event.target.value)} />
+                    <button type="submit" disabled={!commentText.trim()}>댓글 등록</button>
+                  </form>
+                </SkinPanel>
+              </div>
+            </section>
           )}
         </div>
-      )}
-    </div>
+        {menuOpen && (
+          <div className="community-drawer-backdrop" onClick={(event) => {
+            if (event.currentTarget === event.target) setMenuOpen(false);
+          }} onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false); }}>
+            <nav className="community-drawer" aria-label="이동 메뉴">
+              <SkinPanel id="sidebar">
+                {navigation.map(([tab, label]) => <button key={tab} type="button" autoFocus={tab === 'chat'} onClick={() => {
+                  setMenuOpen(false);
+                  onNavigate(tab);
+                }}>{label}</button>)}
+              </SkinPanel>
+            </nav>
+          </div>
+        )}
+      </section>
+    </CommunitySkinProvider>
   );
 };
