@@ -3,6 +3,36 @@ export type BubbleStyle = 'glass' | 'neon' | 'solid';
 export type ChatMode = 'daily' | 'story';
 export type NormalNarratorSceneType = 'daily' | 'romance' | 'exploration' | 'combat' | 'trpg';
 export type NarratorSceneType = NormalNarratorSceneType | 'makjang';
+export type PresenceStatus = 'online' | 'resting' | 'offline';
+
+export interface ChatDisplayPreferences {
+  showStatusMessage: boolean;
+  showPresenceStatus: boolean;
+}
+
+export interface FullSkinSlicedAssets {
+  sourceAssetId?: string;
+  outerFrameAssetId?: string;
+  friendListAssetId?: string;
+  chatBgAssetId?: string;
+  inputBarAssetId?: string;
+}
+
+export interface BubbleCustomization {
+  opponentBubbleAssetId?: string;
+  userBubbleAssetId?: string;
+  opponentTextColor?: string;
+  userTextColor?: string;
+}
+
+export interface RaviAiBridgeState {
+  /** Future expansion: true only when independent Ravi AI app is installed and verified */
+  installed: boolean;
+  /** Future expansion: true only after explicit user approval */
+  connected: boolean;
+  /** Future expansion: user dismissed the upgrade prompt */
+  dismissed?: boolean;
+}
 
 export interface MigratedWorldViewRecord {
   sourceId: string;
@@ -20,6 +50,8 @@ export interface Character {
   description: string;
   speechAndBehavior?: string;
   worldView?: string;
+  /** Reserved for future status message feature (Patch 3 leaves empty if unregistered) */
+  statusMessage?: string;
   migratedWorldViews?: MigratedWorldViewRecord[];
   customSettings: Record<string, string | number | boolean>;
   createdAt: number;
@@ -47,6 +79,8 @@ export interface RoomCustomizationOverride {
   appBackgroundAssetId?: string;
   chatBackgroundAssetId?: string;
   bubbleStyle?: BubbleStyle;
+  fullSkin?: FullSkinSlicedAssets;
+  bubbles?: BubbleCustomization;
 }
 
 export interface RoomCharacterPromptOverride {
@@ -141,6 +175,8 @@ export interface CustomizationSettings {
   chatBackgroundAssetId: string;
   bubbleStyle: BubbleStyle;
   customStickers: string[];
+  fullSkin?: FullSkinSlicedAssets;
+  bubbles?: BubbleCustomization;
   updatedAt: number;
 }
 
@@ -152,6 +188,7 @@ export interface AppSettings {
   autoCleanupDays: number;
   autoCleanupEnabled: boolean;
   welcomeSeen?: boolean;
+  chatDisplayPreferences?: ChatDisplayPreferences;
   schemaVersion: number;
   updatedAt: number;
 }
@@ -159,7 +196,19 @@ export interface AppSettings {
 export interface Asset {
   id: string;
   name: string;
-  type: 'avatar' | 'frame' | 'corner' | 'background' | 'chat-bg' | 'sticker' | 'community';
+  type:
+    | 'avatar'
+    | 'frame'
+    | 'corner'
+    | 'background'
+    | 'chat-bg'
+    | 'sticker'
+    | 'community'
+    | 'full-skin'
+    | 'friend-list-bg'
+    | 'input-bar-bg'
+    | 'bubble-opponent'
+    | 'bubble-user';
   mimeType: string;
   blob?: Blob;
   dataUrl: string;

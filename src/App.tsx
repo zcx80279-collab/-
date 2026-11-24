@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Character,
   ChatRoom,
@@ -6,18 +6,24 @@ import {
   AppSettings,
   UserProfile,
   ThemeMode,
+  PresenceStatus,
+  ChatDisplayPreferences,
+  BubbleCustomization,
   GUIDE_RAVI_ID,
 } from './core/types';
 import { seedInitialData } from './storage/db';
 import { storageService } from './storage/storageService';
-import { DEFAULT_AVATARS, DEFAULT_FRAMES, DEFAULT_CHAT_BACKGROUNDS } from './core/defaultAssets';
+import { DEFAULT_AVATARS, DEFAULT_CHAT_BACKGROUNDS } from './core/defaultAssets';
 import { ChatWorkspace } from './chat/ChatWorkspace';
+import { CyberFrameShell, MainMenuTab } from './chat/CyberFrameShell';
+import { ScreenSettingsPopup } from './chat/ScreenSettingsPopup';
 import { CommunityFeed } from './community/CommunityFeed';
 import { CharacterManager } from './characters/CharacterManager';
 import { SettingsPanel } from './core/SettingsPanel';
 import { VerificationReportModal } from './core/VerificationReportModal';
 import {
   MessageSquare,
+  MessageCircle,
   Users,
   Globe,
   Settings,
@@ -27,9 +33,13 @@ import {
   Sparkles,
   UserCircle2,
   Flame,
+  Search,
+  SlidersHorizontal,
+  Moon,
+  X,
 } from 'lucide-react';
 
-type ActiveTab = 'chat' | 'community' | 'characters' | 'settings' | 'report';
+type ActiveTab = MainMenuTab;
 
 const THEME_WRAPPER_CLASSES: Record<ThemeMode, string> = {
   'dark-indigo': 'bg-[#090b1a] text-slate-100',
@@ -38,6 +48,15 @@ const THEME_WRAPPER_CLASSES: Record<ThemeMode, string> = {
   'neon-pink': 'bg-[#1a0718] text-slate-100',
   'neon-blue': 'bg-[#061224] text-slate-100',
 };
+
+const PRESENCE_STATES: PresenceStatus[] = ['online', 'resting', 'offline'];
+
+function pickRandomPresence(): PresenceStatus {
+  const r = Math.random();
+  if (r < 0.58) return 'online';
+  if (r < 0.82) return 'resting';
+  return 'offline';
+}
 
 export default function App() {
   const [isInitialized, setIsInitialized] = useState(false);
@@ -50,12 +69,30 @@ export default function App() {
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
-  // Section 2: First-Run Welcome Notice Modal (shown once on first launch only)
+  // First-Run Welcome Notice Modal & Persona Prompt Modal
   const [showFirstRunWelcome, setShowFirstRunWelcome] = useState(false);
-
-  // Section 3: User Persona Creation Prompt Modal (shown only when starting actual AI character chat without persona)
   const [showPersonaPromptModal, setShowPersonaPromptModal] = useState(false);
   const [autoOpenPersonaEditor, setAutoOpenPersonaEditor] = useState(false);
+
+  // Patch 3: Friend list search, virtual presence status, screen settings popup, live skin preview
+  const [showSearchInput, setShowSearchInput] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showScreenSettings, setShowScreenSettings] = useState(false);
+  const [presenceMap, setPresenceMap] = useState<Record<string, PresenceStatus>>({});
+  const [skinPreview, setSkinPreview] = useState<{
+    scope: 'global' | 'room';
+    fullSkinDataUrls?: {
+      outerFrame?: string;
+      friendList?: string;
+      chatBg?: string;
+      inputBar?: string;
+    };
+    bubbles?: BubbleCustomization;
+    bubbleDataUrls?: {
+      opponent?: string;
+      user?: string;
+    };
+  } | null>(null);
 
   const [customization, setCustomization] = useState<CustomizationSettings>({
     id: 'customization',
@@ -75,11 +112,15 @@ export default function App() {
     aiImageGenerationEnabled: false,
     autoCleanupDays: 3,
     autoCleanupEnabled: false,
+    chatDisplayPreferences: {
+      showStatusMessage: true,
+      showPresenceStatus: true,
+    },
     schemaVersion: 2,
     updatedAt: Date.now(),
   });
 
-  // Mobile screen transition state: 'list' (left room list) vs 'room' (center chat view)
+  // Mobile screen transition state: 'list' (left friend list) vs 'room' (right chat view)
   const [mobileChatView, setMobileChatView] = useState<'list' | 'room'>('room');
 
   // New Room Modal
@@ -91,6 +132,40 @@ export default function App() {
   useEffect(() => {
     initializeApplication();
   }, []);
+
+  // Initialize & periodically randomize virtual presence status per character (Zero AI API calls; never blocks chat)
+  useEffect(() => {
+    if (characters.length === 0) return;
+
+    setPresenceMap((prev) => {
+      const next: Record<string, PresenceStatus> = { ...prev };
+      for (const c of characters) {
+        if (!next[c.id]) {
+          next[c.id] = c.id === GUIDE_RAVI_ID ? 'online' : pickRandomPresence();
+        }
+      }
+      return next;
+    });
+
+    const interval = window.setInterval(() => {
+      setPresenceMap((prev) => {
+        if (characters.length === 0) return prev;
+        const next: Record<string, PresenceStatus> = { ...prev };
+        // Randomly update 1~2 characters per tick for natural ambient atmosphere
+        const updateCount = Math.min(2, characters.length);
+        for (let i = 0; i < updateCount; i++) {
+          const target = characters[Math.floor(Math.random() * characters.length)];
+          if (!target) continue;
+          const randomState =
+            PRESENCE_STATES[Math.floor(Math.random() * PRESENCE_STATES.length)];
+          next[target.id] = randomState;
+        }
+        return next;
+      });
+    }, 20000);
+
+    return () => window.clearInterval(interval);
+  }, [characters]);
 
   const initializeApplication = async () => {
     try {
@@ -120,7 +195,6 @@ export default function App() {
     setUserProfile(loadedProfile);
 
     if (isInitialLoad) {
-      // Existing users who already registered a profile should not be forced through first-run welcome again
       if (loadedProfile) {
         if (!loadedApp.welcomeSeen) {
           const updated = await storageService.saveAppSettings({ welcomeSeen: true });
@@ -150,12 +224,27 @@ export default function App() {
     }
   };
 
-  const charactersMap: Record<string, Character> = {};
-  for (const c of characters) {
-    charactersMap[c.id] = c;
-  }
+  const charactersMap = useMemo(() => {
+    const map: Record<string, Character> = {};
+    for (const c of characters) {
+      map[c.id] = c;
+    }
+    return map;
+  }, [characters]);
 
   const activeRoom = rooms.find((r) => r.id === activeRoomId) || rooms[0] || null;
+
+  const displayPreferences: ChatDisplayPreferences = appSettings.chatDisplayPreferences ?? {
+    showStatusMessage: true,
+    showPresenceStatus: true,
+  };
+
+  const handleUpdateDisplayPreferences = async (next: ChatDisplayPreferences) => {
+    const updated = await storageService.saveAppSettings({
+      chatDisplayPreferences: next,
+    });
+    setAppSettings(updated);
+  };
 
   const handleDismissWelcome = async (targetTab: ActiveTab) => {
     const updated = await storageService.saveAppSettings({ welcomeSeen: true });
@@ -165,7 +254,7 @@ export default function App() {
   };
 
   const handleSelectRoom = (room: ChatRoom) => {
-    // Guide Ravi is always accessible without user profile or API key
+    // Offline virtual status NEVER blocks chatting; only user persona rule is preserved
     if (room.characterId !== GUIDE_RAVI_ID && !userProfile) {
       setShowPersonaPromptModal(true);
       return;
@@ -215,6 +304,17 @@ export default function App() {
     setActiveTab('characters');
   };
 
+  // Filtered rooms by character name ONLY (never searches chat content or external data)
+  const filteredRooms = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return rooms;
+    return rooms.filter((room) => {
+      const char = charactersMap[room.characterId];
+      const charName = (char?.name || room.title || '').toLowerCase();
+      return charName.includes(q);
+    });
+  }, [rooms, charactersMap, searchQuery]);
+
   if (initError) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
@@ -231,271 +331,409 @@ export default function App() {
 
   if (!isInitialized) {
     return (
-      <div className="min-h-screen bg-[#090b1a] text-slate-100 flex items-center justify-center p-6">
+      <div className="min-h-screen bg-[#080515] text-slate-100 flex items-center justify-center p-6">
         <div className="text-center space-y-2">
           <div className="text-base font-bold text-white">러비러비톡 (Lovy Lovy Talk) 초기화 중...</div>
-          <div className="text-xs text-indigo-300">IndexedDB 로컬 스토리지 및 보안 스키마 검증 중</div>
+          <div className="text-xs text-fuchsia-300">IndexedDB 로컬 스토리지 및 보안 스키마 검증 중</div>
         </div>
       </div>
     );
   }
 
-  // Per-room PNG customization resolution (falls back to existing global customization defaults)
-  const roomCustom = activeTab === 'chat' ? activeRoom?.customization : undefined;
-  const effectiveTheme: ThemeMode = roomCustom?.theme ?? customization.theme;
-  const effectiveFrameAssetId =
-    roomCustom?.frameAssetId !== undefined ? roomCustom.frameAssetId : customization.frameAssetId;
-  const effectiveChatBgAssetId =
+  // Resolve independent Per-Room vs Global PNG Skin & Bubble Customization
+  const roomFullSkin = activeRoom?.customization?.fullSkin;
+  const globalFullSkin = customization.fullSkin;
+  const effectiveFullSkin =
+    roomFullSkin &&
+    (roomFullSkin.outerFrameAssetId ||
+      roomFullSkin.friendListAssetId ||
+      roomFullSkin.chatBgAssetId ||
+      roomFullSkin.inputBarAssetId)
+      ? roomFullSkin
+      : globalFullSkin;
+
+  const previewAppliesToCurrent =
+    skinPreview && (skinPreview.scope === 'global' || skinPreview.scope === 'room');
+
+  const resolvedOuterFrameUrl =
+    (previewAppliesToCurrent ? skinPreview.fullSkinDataUrls?.outerFrame : undefined) ||
+    (effectiveFullSkin?.outerFrameAssetId ? assetUrls[effectiveFullSkin.outerFrameAssetId] : undefined);
+
+  const resolvedFriendListBgUrl =
+    (previewAppliesToCurrent ? skinPreview.fullSkinDataUrls?.friendList : undefined) ||
+    (effectiveFullSkin?.friendListAssetId ? assetUrls[effectiveFullSkin.friendListAssetId] : undefined);
+
+  const legacyChatBgId =
     activeRoom?.customization?.chatBackgroundAssetId !== undefined
       ? activeRoom.customization.chatBackgroundAssetId
       : customization.chatBackgroundAssetId;
+
+  const resolvedChatBgUrl =
+    (previewAppliesToCurrent ? skinPreview.fullSkinDataUrls?.chatBg : undefined) ||
+    (effectiveFullSkin?.chatBgAssetId ? assetUrls[effectiveFullSkin.chatBgAssetId] : undefined) ||
+    (legacyChatBgId && legacyChatBgId !== 'none' && legacyChatBgId !== 'default-chat-bg-night'
+      ? assetUrls[legacyChatBgId] || DEFAULT_CHAT_BACKGROUNDS.darkNight
+      : '');
+
+  const resolvedInputBarUrl =
+    (previewAppliesToCurrent ? skinPreview.fullSkinDataUrls?.inputBar : undefined) ||
+    (effectiveFullSkin?.inputBarAssetId ? assetUrls[effectiveFullSkin.inputBarAssetId] : undefined);
+
+  const savedBubbles: BubbleCustomization | undefined =
+    activeRoom?.customization?.bubbles ?? customization.bubbles;
+
+  const effectiveBubbles: BubbleCustomization | undefined =
+    previewAppliesToCurrent && skinPreview.bubbles ? skinPreview.bubbles : savedBubbles;
+
+  const effectiveAssetUrls: Record<string, string> =
+    previewAppliesToCurrent && skinPreview.bubbleDataUrls
+      ? {
+          ...assetUrls,
+          ...(skinPreview.bubbleDataUrls.opponent
+            ? { '__preview_opponent_bubble__': skinPreview.bubbleDataUrls.opponent }
+            : {}),
+          ...(skinPreview.bubbleDataUrls.user
+            ? { '__preview_user_bubble__': skinPreview.bubbleDataUrls.user }
+            : {}),
+        }
+      : assetUrls;
+
+  const effectiveBubblesWithPreview: BubbleCustomization | undefined =
+    previewAppliesToCurrent && skinPreview.bubbleDataUrls
+      ? {
+          ...effectiveBubbles,
+          ...(skinPreview.bubbleDataUrls.opponent
+            ? { opponentBubbleAssetId: '__preview_opponent_bubble__' }
+            : {}),
+          ...(skinPreview.bubbleDataUrls.user
+            ? { userBubbleAssetId: '__preview_user_bubble__' }
+            : {}),
+        }
+      : effectiveBubbles;
+
   const effectiveBubbleStyle = activeRoom?.customization?.bubbleStyle ?? customization.bubbleStyle;
+  const effectiveTheme: ThemeMode =
+    (activeTab === 'chat' ? activeRoom?.customization?.theme : undefined) ?? customization.theme;
 
-  const frameOverlayUrl =
-    effectiveFrameAssetId && effectiveFrameAssetId !== 'none'
-      ? assetUrls[effectiveFrameAssetId] || DEFAULT_FRAMES.cyberIndigo
-      : '';
+  const activeRoomChar = activeRoom ? charactersMap[activeRoom.characterId] : undefined;
+  const activeRoomDisplayName =
+    activeRoomChar?.name || activeRoom?.title || '선택된 채팅방';
 
-  const chatBgUrl =
-    effectiveChatBgAssetId && effectiveChatBgAssetId !== 'none'
-      ? assetUrls[effectiveChatBgAssetId] || DEFAULT_CHAT_BACKGROUNDS.darkNight
-      : '';
-
-  return (
-    <div
-      className={`h-screen w-screen overflow-hidden flex flex-col select-none sm:select-auto ${
-        THEME_WRAPPER_CLASSES[effectiveTheme] || THEME_WRAPPER_CLASSES['dark-indigo']
-      }`}
-    >
-      {/* Top Bar: Wordmark, 4 Main Menus (채팅방, 커뮤니티, 캐릭터 관리, 환경설정), and Report */}
-      <header className="h-14 px-4 sm:px-6 bg-slate-950/90 backdrop-blur-md border-b border-indigo-500/30 flex items-center justify-between gap-8 shrink-0 z-30">
-        <a
-          href="#top"
-          onClick={(e) => {
-            e.preventDefault();
-            setActiveTab('chat');
-          }}
-          className="text-base sm:text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0"
+  const renderPresenceBadge = (status: PresenceStatus) => {
+    if (status === 'online') {
+      return (
+        <span
+          title="접속 중"
+          className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-[#22c55e] border-2 border-[#120826] shadow-[0_0_8px_rgba(34,197,94,0.85)]"
+        />
+      );
+    }
+    if (status === 'resting') {
+      return (
+        <span
+          title="휴식 중"
+          className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-[#facc15] border-2 border-[#120826] shadow-[0_0_8px_rgba(250,204,21,0.8)] flex items-center justify-center"
         >
-          러비러비톡 Lovy Lovy Talk
-        </a>
+          <Moon size={9} className="text-[#120826] fill-[#120826]" />
+        </span>
+      );
+    }
+    return (
+      <span
+        title="오프라인"
+        className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-slate-500 border-2 border-[#120826]"
+      />
+    );
+  };
 
-        <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-slate-300">
+  // Left Friend List Panel (Redesigned to match 13943.png)
+  const friendListPanel = (
+    <div
+      className="flex flex-col h-full w-full bg-[#0b061a]/92 overflow-hidden"
+      style={
+        resolvedFriendListBgUrl
+          ? {
+              backgroundImage: `url("${resolvedFriendListBgUrl}")`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }
+          : undefined
+      }
+    >
+      {/* Top Action Toolbar: Magnifier (Search), Slider (Screen Settings), + 새 채팅방 */}
+      <div className="px-3.5 pt-3.5 pb-2.5 flex items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setActiveTab('chat')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'chat'
-                ? 'text-pink-400 underline underline-offset-8 decoration-2'
-                : 'hover:text-white'
+            onClick={() => {
+              setShowSearchInput((prev) => {
+                if (prev) setSearchQuery('');
+                return !prev;
+              });
+            }}
+            title="캐릭터 이름 검색"
+            aria-label="캐릭터 이름 검색"
+            className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all cursor-pointer ${
+              showSearchInput || searchQuery
+                ? 'bg-fuchsia-950/90 border-fuchsia-400 text-fuchsia-200 shadow-[0_0_12px_rgba(232,121,249,0.45)]'
+                : 'bg-[#160b2e]/90 hover:bg-[#231147] border-indigo-400/35 text-slate-200'
             }`}
           >
-            채팅방
+            <Search size={18} />
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('community')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'community'
-                ? 'text-pink-400 underline underline-offset-8 decoration-2'
-                : 'hover:text-white'
-            }`}
-          >
-            커뮤니티
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('characters')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'characters'
-                ? 'text-pink-400 underline underline-offset-8 decoration-2'
-                : 'hover:text-white'
-            }`}
-          >
-            캐릭터 관리
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('settings')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'settings'
-                ? 'text-pink-400 underline underline-offset-8 decoration-2'
-                : 'hover:text-white'
-            }`}
-          >
-            환경설정
-          </button>
-        </nav>
 
-        <div className="flex items-center shrink-0">
           <button
             type="button"
-            onClick={() => setActiveTab('report')}
-            className={`min-h-[36px] px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'report'
-                ? 'bg-pink-600 text-white'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+            onClick={() => setShowScreenSettings(true)}
+            title="화면 설정 및 PNG 커스터마이징"
+            aria-label="화면 설정 열기"
+            className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all cursor-pointer ${
+              showScreenSettings
+                ? 'bg-fuchsia-950/90 border-fuchsia-400 text-fuchsia-200 shadow-[0_0_12px_rgba(232,121,249,0.45)]'
+                : 'bg-[#160b2e]/90 hover:bg-[#231147] border-indigo-400/35 text-slate-200'
             }`}
           >
-            검수 보고서
+            <SlidersHorizontal size={18} />
           </button>
         </div>
-      </header>
 
-      {/* Main Workspace with Per-Room 9-Slice External Frame Skin Overlay */}
-      <div className="flex-1 min-h-0 flex relative overflow-hidden p-1.5 sm:p-2.5">
-        {frameOverlayUrl && (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-1 sm:inset-1.5 z-20 rounded-2xl overflow-hidden"
-            style={{
-              borderWidth: '12px',
-              borderStyle: 'solid',
-              borderColor: 'transparent',
-              borderImageSource: `url("${frameOverlayUrl}")`,
-              borderImageSlice: '36 fill',
-              borderImageRepeat: 'stretch',
-              opacity: 0.42,
-            }}
-          />
-        )}
+        <button
+          type="button"
+          onClick={() => setShowNewRoomModal(true)}
+          className="h-10 px-4 rounded-xl bg-gradient-to-r from-[#d946ef] via-[#ec4899] to-[#c026d3] hover:brightness-110 text-xs sm:text-sm font-bold text-white flex items-center gap-1.5 shadow-[0_0_18px_rgba(236,72,153,0.55)] border border-fuchsia-200/45 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <Plus size={16} strokeWidth={2.5} />
+          <span>새 채팅방</span>
+        </button>
+      </div>
 
-        <div className="flex-1 min-h-0 flex rounded-2xl overflow-hidden border border-indigo-500/30 bg-slate-950/60 backdrop-blur-md relative z-10">
-          {/* Left Sidebar: Characters & Chat Rooms List */}
-          <aside
-            className={`${
-              activeTab === 'chat'
-                ? mobileChatView === 'list'
-                  ? 'flex w-full md:w-72 lg:w-80'
-                  : 'hidden md:flex md:w-72 lg:w-80'
-                : 'hidden lg:flex lg:w-72'
-            } flex-col h-full bg-slate-900/95 border-r border-indigo-500/30 shrink-0`}
-          >
-            {/* Sidebar Header */}
-            <div className="p-3.5 border-b border-indigo-500/30 flex items-center justify-between gap-2">
-              <div>
-                <h2 className="text-xs font-bold text-white">캐릭터 및 채팅방 목록</h2>
-                <p className="text-[11px] text-slate-400">총 {rooms.length}개 채널 활성</p>
-              </div>
+      {/* Inline Character Name Search Input (when toggled) */}
+      {showSearchInput && (
+        <div className="px-3.5 pb-2.5 shrink-0">
+          <div className="flex items-center gap-2 px-3 h-9 rounded-xl bg-[#130928]/95 border border-fuchsia-400/55 shadow-[0_0_10px_rgba(232,121,249,0.2)]">
+            <Search size={14} className="text-fuchsia-300 shrink-0" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="캐릭터 이름으로 검색..."
+              className="flex-1 bg-transparent text-xs text-white placeholder:text-slate-400 focus:outline-none"
+            />
+            {searchQuery && (
               <button
                 type="button"
-                onClick={() => setShowNewRoomModal(true)}
-                className="min-h-[36px] px-2.5 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-semibold text-white flex items-center gap-1 whitespace-nowrap shrink-0"
+                onClick={() => setSearchQuery('')}
+                aria-label="검색어 지우기"
+                className="text-slate-400 hover:text-white cursor-pointer"
               >
-                <Plus size={13} />
-                <span>새 채팅방</span>
+                <X size={13} />
               </button>
-            </div>
+            )}
+          </div>
+        </div>
+      )}
 
-            {/* Quick Character Avatars Bar */}
-            <div className="px-3.5 py-2.5 border-b border-slate-800/80 flex items-center gap-2 overflow-x-auto">
-              {characters.map((c) => {
-                const avatar = assetUrls[c.avatarAssetId] || DEFAULT_AVATARS.ravi;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => handleOpenChatWithCharacter(c.id)}
-                    title={c.name}
-                    className="group flex flex-col items-center gap-1 shrink-0 w-14"
-                  >
-                    <div className="w-10 h-10 rounded-xl border border-indigo-400/50 group-hover:border-pink-400 overflow-hidden p-0.5 bg-slate-950 transition-colors">
-                      <img
-                        src={avatar}
-                        alt={c.name}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover rounded-[9px]"
-                      />
-                    </div>
-                    <span className="text-[10px] text-slate-300 group-hover:text-white truncate w-full text-center">
-                      {c.name}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+      {/* Large Character Cards Vertical Scroll List */}
+      <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-2 cyber-scrollbar">
+        {filteredRooms.length === 0 ? (
+          <div className="py-10 px-4 text-center text-xs text-slate-400">
+            {searchQuery.trim()
+              ? `'${searchQuery.trim()}'에 해당하는 캐릭터가 없습니다.`
+              : '등록된 채팅방이 없습니다.'}
+          </div>
+        ) : (
+          filteredRooms.map((room) => {
+            const char = charactersMap[room.characterId];
+            const isSelected = activeRoom?.id === room.id && activeTab === 'chat';
+            const avatarSrc = char
+              ? assetUrls[char.avatarAssetId] || DEFAULT_AVATARS.ravi
+              : DEFAULT_AVATARS.ravi;
+            const displayName = char
+              ? char.name
+              : room.title || `삭제된 캐릭터 (${room.characterId})`;
+            const presence: PresenceStatus =
+              presenceMap[room.characterId] ||
+              (room.characterId === GUIDE_RAVI_ID ? 'online' : 'online');
+            // Status message: Patch 3 reserves display area & keeps empty if unregistered
+            const statusMsg = (char?.statusMessage || '').trim();
 
-            {/* Chat Rooms Vertical List */}
-            <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
-              {rooms.map((room) => {
-                const char = charactersMap[room.characterId];
-                const isGuide = room.characterId === GUIDE_RAVI_ID;
-                const isSelected = activeRoom?.id === room.id && activeTab === 'chat';
-                const avatarSrc = char
-                  ? assetUrls[char.avatarAssetId] || DEFAULT_AVATARS.ravi
-                  : DEFAULT_AVATARS.ravi;
-
-                return (
-                  <button
-                    key={room.id}
-                    type="button"
-                    onClick={() => handleSelectRoom(room)}
-                    className={`w-full min-h-[56px] p-2.5 rounded-xl border text-left transition-all flex items-center gap-3 ${
+            return (
+              <button
+                key={room.id}
+                type="button"
+                onClick={() => handleSelectRoom(room)}
+                className={`w-full px-3 py-2.5 rounded-2xl text-left transition-all duration-150 flex items-center gap-3.5 cursor-pointer ${
+                  isSelected ? 'cyber-friend-card-selected' : 'cyber-friend-card-default'
+                }`}
+              >
+                {/* Large Profile Avatar + Presence Status Dot */}
+                <div className="relative w-14 h-14 shrink-0">
+                  <div
+                    className={`w-14 h-14 rounded-full overflow-hidden p-[2px] ${
                       isSelected
-                        ? 'bg-indigo-950/90 border-pink-500/60 text-white shadow-md'
-                        : 'bg-slate-950/60 hover:bg-slate-900 border-slate-800/80 text-slate-300'
+                        ? 'bg-gradient-to-tr from-fuchsia-400 via-pink-400 to-cyan-300 shadow-[0_0_14px_rgba(232,121,249,0.65)]'
+                        : 'bg-gradient-to-tr from-indigo-500/60 to-fuchsia-500/50'
                     }`}
                   >
                     <img
                       src={avatarSrc}
-                      alt={char ? char.name : '보존된 대화방'}
+                      alt={displayName}
                       referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-xl border border-indigo-500/40 object-cover shrink-0"
+                      className="w-full h-full rounded-full object-cover bg-[#120826]"
                     />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-xs font-bold text-white truncate flex items-center gap-1">
-                          <span className="truncate">
-                            {room.title || (char ? `${char.name} 대화방` : '삭제된 캐릭터 대화방')}
-                          </span>
-                          {room.makjangMode && (
-                            <span title="막장 모드 활성화됨" className="inline-flex items-center shrink-0">
-                              <Flame size={11} className="text-red-400" />
-                            </span>
-                          )}
-                        </span>
-                        <span className="text-[10px] text-slate-400 shrink-0">
-                          {isGuide
-                            ? '고정 안내'
-                            : room.mode === 'story'
-                            ? '스토리'
-                            : '일상'}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 truncate mt-0.5">
-                        {char
-                          ? char.name
-                          : `삭제된 캐릭터 (${room.characterId}) · 기록 보존됨`}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </aside>
+                  </div>
+                  {displayPreferences.showPresenceStatus && renderPresenceBadge(presence)}
+                </div>
 
-          {/* Center & Right Viewport Container */}
-          <main
-            className={`${
-              activeTab === 'chat' && mobileChatView === 'list' ? 'hidden md:flex' : 'flex'
-            } flex-1 flex-col min-w-0 h-full overflow-hidden`}
-          >
-            {activeTab === 'chat' && (
+                {/* Name & Reserved Status Message Area */}
+                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-[15px] font-bold text-white truncate tracking-tight">
+                      {displayName}
+                    </span>
+                    {room.makjangMode && (
+                      <span title="막장 모드 활성화됨" className="shrink-0">
+                        <Flame size={12} className="text-red-400" />
+                      </span>
+                    )}
+                  </div>
+
+                  {displayPreferences.showStatusMessage && (
+                    <div className="mt-1 min-h-[18px] flex items-center gap-1.5 text-xs text-slate-300/90 truncate">
+                      {statusMsg ? (
+                        <>
+                          {presence === 'resting' ? (
+                            <Moon size={12} className="text-amber-300 shrink-0" />
+                          ) : (
+                            <MessageCircle size={12} className="text-slate-300 shrink-0" />
+                          )}
+                          <span className="truncate">{statusMsg}</span>
+                        </>
+                      ) : (
+                        <span className="sr-only">상태 메시지 없음</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      className={`h-screen w-screen overflow-hidden flex flex-col select-none sm:select-auto ${
+        activeTab === 'chat'
+          ? 'bg-[#080515] text-slate-100'
+          : THEME_WRAPPER_CLASSES[effectiveTheme] || THEME_WRAPPER_CLASSES['dark-indigo']
+      }`}
+    >
+      {/* MAIN CHAT TAB: Redesigned Cyber Rabbit OS Full-Screen Shell (13943.png) */}
+      {activeTab === 'chat' ? (
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <CyberFrameShell
+            activeTab={activeTab}
+            onSelectTab={(tab) => setActiveTab(tab)}
+            customOuterFrameUrl={resolvedOuterFrameUrl}
+            leftPanel={friendListPanel}
+            mobileChatView={mobileChatView}
+            rightPanel={
               <ChatWorkspace
                 activeRoom={activeRoom}
                 charactersMap={charactersMap}
-                assetUrls={assetUrls}
+                assetUrls={effectiveAssetUrls}
                 globalCustomization={customization}
-                chatBackgroundUrl={chatBgUrl}
+                chatBackgroundUrl={resolvedChatBgUrl}
+                customInputBarUrl={resolvedInputBarUrl}
                 bubbleStyle={effectiveBubbleStyle}
+                bubbleCustomization={effectiveBubblesWithPreview}
                 userProfile={userProfile}
                 onRequireUserProfile={() => setShowPersonaPromptModal(true)}
                 onRoomUpdated={() => reloadAllState()}
                 onNavigateTab={(tab) => setActiveTab(tab)}
                 onBackToMobileList={() => setMobileChatView('list')}
               />
-            )}
+            }
+          />
+        </div>
+      ) : (
+        /* OTHER EXISTING PAGES (Community, CharacterManager, Settings, Report) - Design Preserved Unchanged */
+        <>
+          <header className="h-14 px-4 sm:px-6 bg-slate-950/90 backdrop-blur-md border-b border-indigo-500/30 flex items-center justify-between gap-8 shrink-0 z-30">
+            <a
+              href="#top"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab('chat');
+              }}
+              className="text-base sm:text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0"
+            >
+              러비러비톡 Lovy Lovy Talk
+            </a>
 
+            <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-slate-300">
+              <button
+                type="button"
+                onClick={() => setActiveTab('chat')}
+                className="py-1 transition-colors whitespace-nowrap shrink-0 hover:text-white cursor-pointer"
+              >
+                채팅방
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('community')}
+                className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeTab === 'community'
+                    ? 'text-pink-400 underline underline-offset-8 decoration-2'
+                    : 'hover:text-white'
+                }`}
+              >
+                커뮤니티
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('characters')}
+                className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeTab === 'characters'
+                    ? 'text-pink-400 underline underline-offset-8 decoration-2'
+                    : 'hover:text-white'
+                }`}
+              >
+                캐릭터 관리
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('settings')}
+                className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeTab === 'settings'
+                    ? 'text-pink-400 underline underline-offset-8 decoration-2'
+                    : 'hover:text-white'
+                }`}
+              >
+                환경설정
+              </button>
+            </nav>
+
+            <div className="flex items-center shrink-0">
+              <button
+                type="button"
+                onClick={() => setActiveTab('report')}
+                className={`min-h-[36px] px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeTab === 'report'
+                    ? 'bg-pink-600 text-white'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                }`}
+              >
+                검수 보고서
+              </button>
+            </div>
+          </header>
+
+          <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
             {activeTab === 'community' && (
               <CommunityFeed
                 characters={characters}
@@ -526,19 +764,19 @@ export default function App() {
 
             {activeTab === 'report' && <VerificationReportModal />}
           </main>
-        </div>
-      </div>
+        </>
+      )}
 
-      {/* Mobile Bottom Navigation Bar (4 Main Tabs: 채팅, 커뮤니티, 캐릭터, 설정) */}
-      <nav className="md:hidden h-14 bg-slate-950/95 border-t border-indigo-500/30 grid grid-cols-4 items-center shrink-0 z-30">
+      {/* Mobile Bottom Navigation Bar (4 Main Tabs: 채팅방, 커뮤니티, 캐릭터 관리, 환경설정) */}
+      <nav className="md:hidden h-14 bg-[#0b061a]/95 border-t border-fuchsia-500/35 grid grid-cols-4 items-center shrink-0 z-30">
         <button
           type="button"
           onClick={() => {
             setActiveTab('chat');
             setMobileChatView('list');
           }}
-          className={`h-full flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'chat' ? 'text-pink-400' : 'text-slate-400'
+          className={`h-full flex flex-col items-center justify-center text-[10px] font-semibold ${
+            activeTab === 'chat' ? 'text-fuchsia-400' : 'text-slate-400'
           }`}
         >
           <MessageSquare size={17} />
@@ -547,8 +785,8 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('community')}
-          className={`h-full flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'community' ? 'text-pink-400' : 'text-slate-400'
+          className={`h-full flex flex-col items-center justify-center text-[10px] font-semibold ${
+            activeTab === 'community' ? 'text-fuchsia-400' : 'text-slate-400'
           }`}
         >
           <Globe size={17} />
@@ -557,8 +795,8 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('characters')}
-          className={`h-full flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'characters' ? 'text-pink-400' : 'text-slate-400'
+          className={`h-full flex flex-col items-center justify-center text-[10px] font-semibold ${
+            activeTab === 'characters' ? 'text-fuchsia-400' : 'text-slate-400'
           }`}
         >
           <Users size={17} />
@@ -567,8 +805,8 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('settings')}
-          className={`h-full flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'settings' ? 'text-pink-400' : 'text-slate-400'
+          className={`h-full flex flex-col items-center justify-center text-[10px] font-semibold ${
+            activeTab === 'settings' ? 'text-fuchsia-400' : 'text-slate-400'
           }`}
         >
           <Settings size={17} />
@@ -576,7 +814,21 @@ export default function App() {
         </button>
       </nav>
 
-      {/* Section 2: First-Run Welcome Notice Modal (Shown Once on Initial Run) */}
+      {/* Floating Screen Settings & PNG Customization Popup (Slider Icon) */}
+      <ScreenSettingsPopup
+        isOpen={showScreenSettings}
+        onClose={() => setShowScreenSettings(false)}
+        displayPreferences={displayPreferences}
+        onChangeDisplayPreferences={handleUpdateDisplayPreferences}
+        globalCustomization={customization}
+        activeRoom={activeRoom}
+        activeRoomTitle={activeRoomDisplayName}
+        assetUrls={assetUrls}
+        onCustomizationSaved={() => reloadAllState()}
+        onPreviewSkinChange={setSkinPreview}
+      />
+
+      {/* First-Run Welcome Notice Modal */}
       {showFirstRunWelcome && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-lg p-6 rounded-2xl bg-slate-900 border-2 border-pink-500/50 space-y-5 shadow-2xl">
@@ -609,14 +861,14 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => handleDismissWelcome('chat')}
-                className="min-h-[42px] px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-100"
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-100 cursor-pointer"
               >
                 둘러보기
               </button>
               <button
                 type="button"
                 onClick={() => handleDismissWelcome('settings')}
-                className="min-h-[42px] px-5 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-bold text-white shadow-lg shadow-pink-600/30"
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-bold text-white shadow-lg shadow-pink-600/30 cursor-pointer"
               >
                 설정으로 이동
               </button>
@@ -625,7 +877,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Section 3: Persona Creation Prompt Modal (Shown only when starting real AI character chat without persona) */}
+      {/* Persona Creation Prompt Modal */}
       {showPersonaPromptModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-md p-6 rounded-2xl bg-slate-900 border-2 border-emerald-500/50 space-y-5 shadow-2xl">
@@ -650,14 +902,14 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setShowPersonaPromptModal(false)}
-                className="min-h-[42px] px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200"
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 cursor-pointer"
               >
                 돌아가기
               </button>
               <button
                 type="button"
                 onClick={handleGoCreatePersona}
-                className="min-h-[42px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-lg shadow-emerald-600/30"
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-lg shadow-emerald-600/30 cursor-pointer"
               >
                 나의 분신 만들기
               </button>
@@ -666,7 +918,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Create New Chat Room Modal */}
+      {/* Create New Chat Room Modal (Existing logic preserved) */}
       {showNewRoomModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
           <form
@@ -709,7 +961,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setNewRoomMode('daily')}
-                  className={`min-h-[40px] px-3 py-2 rounded-xl border text-xs font-semibold ${
+                  className={`min-h-[40px] px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
                     newRoomMode === 'daily'
                       ? 'bg-indigo-600 border-indigo-400 text-white'
                       : 'bg-slate-950 border-slate-800 text-slate-400'
@@ -720,7 +972,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setNewRoomMode('story')}
-                  className={`min-h-[40px] px-3 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1 ${
+                  className={`min-h-[40px] px-3 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer ${
                     newRoomMode === 'story'
                       ? 'bg-pink-600 border-pink-400 text-white'
                       : 'bg-slate-950 border-slate-800 text-slate-400'
@@ -736,13 +988,13 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setShowNewRoomModal(false)}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-800 text-xs text-slate-300"
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-800 text-xs text-slate-300 cursor-pointer"
               >
                 취소
               </button>
               <button
                 type="submit"
-                className="min-h-[40px] px-5 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-semibold text-white"
+                className="min-h-[40px] px-5 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-semibold text-white cursor-pointer"
               >
                 채팅방 만들기
               </button>

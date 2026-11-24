@@ -96,6 +96,38 @@ export const storageService = {
     return { asset: newAsset, deduplicated: false };
   },
 
+  async registerAssetFromDataUrl(
+    dataUrl: string,
+    type: Asset['type'],
+    customName: string,
+    dimensions?: string
+  ): Promise<{ asset: Asset; deduplicated: boolean }> {
+    const db = await getDb();
+    const contentHash = await computeContentHash(dataUrl);
+    const existingByHash = await db.getAllFromIndex('assets', 'by-hash', contentHash);
+    const matchingAsset = existingByHash.find((a) => a.type === type);
+    if (matchingAsset) {
+      return { asset: matchingAsset, deduplicated: true };
+    }
+
+    const mimeMatch = dataUrl.match(/^data:(.*?);/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+    const newAsset: Asset = {
+      id: `asset-${type}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      name: customName,
+      type,
+      mimeType,
+      dataUrl,
+      contentHash,
+      isDefault: false,
+      dimensions,
+      createdAt: Date.now(),
+    };
+
+    await db.put('assets', newAsset);
+    return { asset: newAsset, deduplicated: false };
+  },
+
   async checkAssetReferences(assetId: string): Promise<AssetReferenceReport> {
     const db = await getDb();
     const referencedBy: string[] = [];
@@ -126,6 +158,13 @@ export const storageService = {
       if (custom.cornerAssetId === assetId) referencedBy.push('공용 기본 모서리 장식 스킨');
       if (custom.appBackgroundAssetId === assetId) referencedBy.push('공용 기본 앱 전체 배경');
       if (custom.customStickers?.includes(assetId)) referencedBy.push('등록된 커스텀 스티커 목록');
+      if (custom.fullSkin?.sourceAssetId === assetId) referencedBy.push('공용 전체 스킨 원본 PNG');
+      if (custom.fullSkin?.outerFrameAssetId === assetId) referencedBy.push('공용 외곽 프레임 PNG');
+      if (custom.fullSkin?.friendListAssetId === assetId) referencedBy.push('공용 왼쪽 친구 목록 PNG');
+      if (custom.fullSkin?.chatBgAssetId === assetId) referencedBy.push('공용 오른쪽 채팅 배경 PNG');
+      if (custom.fullSkin?.inputBarAssetId === assetId) referencedBy.push('공용 하단 입력창 PNG');
+      if (custom.bubbles?.opponentBubbleAssetId === assetId) referencedBy.push('공용 상대방 말풍선 PNG');
+      if (custom.bubbles?.userBubbleAssetId === assetId) referencedBy.push('공용 사용자 말풍선 PNG');
     }
 
     const rooms = await db.getAll('rooms');
@@ -137,6 +176,13 @@ export const storageService = {
       if (rc.chatBackgroundAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 배경`);
       if (rc.cornerAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 모서리 장식`);
       if (rc.appBackgroundAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 전체 배경`);
+      if (rc.fullSkin?.sourceAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 전체 스킨 PNG`);
+      if (rc.fullSkin?.outerFrameAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 외곽 프레임 PNG`);
+      if (rc.fullSkin?.friendListAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 친구 목록 PNG`);
+      if (rc.fullSkin?.chatBgAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 채팅 배경 PNG`);
+      if (rc.fullSkin?.inputBarAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 입력창 PNG`);
+      if (rc.bubbles?.opponentBubbleAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 상대방 말풍선 PNG`);
+      if (rc.bubbles?.userBubbleAssetId === assetId) referencedBy.push(`채팅방(${roomLabel}) 사용자 말풍선 PNG`);
     }
 
     return {

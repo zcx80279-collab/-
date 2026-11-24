@@ -4,32 +4,80 @@ function svgToDataUrl(svg: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
 }
 
+/**
+ * Cyber Rabbit OS Official Mascot (Neon outline bunny with upright ears, X eyes, w mouth)
+ * Used ONLY in:
+ * 1) Guide Ravi profile avatar
+ * 2) Center translucent watermark of the main chat screen
+ */
+export const CYBER_RABBIT_WATERMARK_SVG = `
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 280" fill="none">
+    <defs>
+      <filter id="rabbitGlow" x="-25%" y="-25%" width="150%" height="150%">
+        <feGaussianBlur stdDeviation="4.5" result="blur"/>
+        <feMerge>
+          <feMergeNode in="blur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#rabbitGlow)" stroke="#e879f9" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Bunny silhouette: left ear, dip, right ear, rounded head -->
+      <path d="M 88 112
+               C 74 72, 68 34, 86 24
+               C 104 14, 114 58, 114 104
+               C 118 103, 122 103, 126 104
+               C 126 58, 136 14, 154 24
+               C 172 34, 166 72, 152 112
+               C 182 126, 198 156, 196 190
+               C 194 232, 162 256, 120 256
+               C 78 256, 46 232, 44 190
+               C 42 156, 58 126, 88 112 Z" />
+      <!-- Left X eye -->
+      <path d="M 74 176 L 94 196 M 94 176 L 74 196" stroke-width="6.5"/>
+      <!-- Right X eye -->
+      <path d="M 146 176 L 166 196 M 166 176 L 146 196" stroke-width="6.5"/>
+      <!-- Cute w / smile mouth -->
+      <path d="M 111 212 Q 120 222 129 212" stroke-width="6"/>
+    </g>
+  </svg>
+`;
+
 export const DEFAULT_AVATARS = {
   ravi: svgToDataUrl(`
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
       <defs>
-        <linearGradient id="raviGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#4f46e5"/>
-          <stop offset="50%" stop-color="#7c3aed"/>
-          <stop offset="100%" stop-color="#ec4899"/>
-        </linearGradient>
+        <radialGradient id="raviBg" cx="50%" cy="50%" r="65%">
+          <stop offset="0%" stop-color="#3b0764"/>
+          <stop offset="65%" stop-color="#1a0633"/>
+          <stop offset="100%" stop-color="#0d041d"/>
+        </radialGradient>
+        <filter id="raviNeon" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation="3.2" result="blur"/>
+          <feMerge>
+            <feMergeNode in="blur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
       </defs>
-      <rect width="160" height="160" rx="36" fill="url(#raviGrad)"/>
-      <rect x="8" y="8" width="144" height="144" rx="30" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="2"/>
-      <!-- Cyber Rabbit Ears -->
-      <path d="M55 24 C48 24 45 55 52 72 L66 72 C70 55 62 24 55 24 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="3"/>
-      <path d="M105 24 C98 24 90 55 94 72 L108 72 C115 55 112 24 105 24 Z" fill="#0f172a" stroke="#f472b6" stroke-width="3"/>
-      <!-- Head Visor -->
-      <rect x="36" y="64" width="88" height="62" rx="28" fill="#0f172a" stroke="#a855f7" stroke-width="3"/>
-      <!-- Glowing Eyes -->
-      <circle cx="62" cy="92" r="8" fill="#38bdf8"/>
-      <circle cx="98" cy="92" r="8" fill="#f472b6"/>
-      <circle cx="64" cy="89" r="2.5" fill="#ffffff"/>
-      <circle cx="100" cy="89" r="2.5" fill="#ffffff"/>
-      <!-- Smile -->
-      <path d="M72 106 Q80 113 88 106" fill="none" stroke="#e2e8f0" stroke-width="3" stroke-linecap="round"/>
-      <!-- Headset Mic -->
-      <path d="M36 95 L24 95 L24 112 L48 112" fill="none" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
+      <rect width="160" height="160" rx="80" fill="url(#raviBg)"/>
+      <circle cx="80" cy="80" r="74" fill="none" stroke="#e879f9" stroke-opacity="0.7" stroke-width="3"/>
+      <g filter="url(#raviNeon)" transform="translate(20, 12) scale(0.5)">
+        <path d="M 88 112
+                 C 74 72, 68 34, 86 24
+                 C 104 14, 114 58, 114 104
+                 C 118 103, 122 103, 126 104
+                 C 126 58, 136 14, 154 24
+                 C 172 34, 166 72, 152 112
+                 C 182 126, 198 156, 196 190
+                 C 194 232, 162 256, 120 256
+                 C 78 256, 46 232, 44 190
+                 C 42 156, 58 126, 88 112 Z"
+              fill="#14072b" stroke="#f5d0fe" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M 74 176 L 94 196 M 94 176 L 74 196" stroke="#f5d0fe" stroke-width="8" stroke-linecap="round"/>
+        <path d="M 146 176 L 166 196 M 166 176 L 146 196" stroke="#f5d0fe" stroke-width="8" stroke-linecap="round"/>
+        <path d="M 111 212 Q 120 222 129 212" fill="none" stroke="#f5d0fe" stroke-width="7.5" stroke-linecap="round"/>
+      </g>
     </svg>
   `),
   luna: svgToDataUrl(`
@@ -144,14 +192,11 @@ export const DEFAULT_COMMUNITY_IMAGES = {
         </linearGradient>
       </defs>
       <rect width="640" height="360" fill="url(#sky)"/>
-      <!-- Cyber Horizon Sun -->
       <circle cx="320" cy="210" r="75" fill="#ec4899" fill-opacity="0.75"/>
-      <!-- City Silhouette -->
       <rect x="40" y="140" width="55" height="160" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
       <rect x="110" y="110" width="70" height="190" fill="#0f172a" stroke="#a855f7" stroke-width="1.5"/>
       <rect x="460" y="125" width="65" height="175" fill="#0f172a" stroke="#f472b6" stroke-width="1.5"/>
       <rect x="540" y="155" width="50" height="145" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
-      <!-- Neon Road Grid -->
       <path d="M0 300 L640 300" stroke="#38bdf8" stroke-width="2"/>
       <path d="M320 300 L120 360 M320 300 L240 360 M320 300 L400 360 M320 300 L520 360" stroke="#ec4899" stroke-width="1.5" stroke-opacity="0.6"/>
     </svg>
@@ -163,7 +208,6 @@ export const DEFAULT_COMMUNITY_IMAGES = {
       <circle cx="280" cy="60" r="1.5" fill="#38bdf8"/>
       <circle cx="480" cy="80" r="2.5" fill="#f472b6"/>
       <circle cx="540" cy="160" r="1.5" fill="#ffffff"/>
-      <!-- Planet & Ring -->
       <circle cx="320" cy="175" r="64" fill="#1e3a8a" stroke="#38bdf8" stroke-width="2"/>
       <ellipse cx="320" cy="175" rx="115" ry="26" fill="none" stroke="#ec4899" stroke-width="3" stroke-opacity="0.7" transform="rotate(-14 320 175)"/>
     </svg>

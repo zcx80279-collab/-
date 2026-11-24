@@ -402,7 +402,7 @@ export async function seedInitialData(): Promise<void> {
 
   for (const item of defaultAssetsList) {
     const existing = await db.get('assets', item.id);
-    if (!existing || existing.dataUrl.startsWith('http')) {
+    if (!existing || existing.dataUrl.startsWith('http') || (item.id === 'guide-ravi-avatar' && existing.isDefault && existing.dataUrl !== item.dataUrl)) {
       const contentHash = await computeContentHash(item.dataUrl);
       const blob = dataUrlToBlob(item.dataUrl);
       await db.put('assets', {
