@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import {
   CommunityPost,
   CommunityComment,
@@ -73,6 +73,12 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     loadCommunityData();
   }, []);
 
+  useEffect(() => {
+    if (characters.length > 0 && !characters.some((c) => c.id === authorId)) {
+      setAuthorId(characters[0].id);
+    }
+  }, [characters, authorId]);
+
   const loadCommunityData = async () => {
     const [{ posts: loadedPosts, commentsByPost: loadedComments }, allAssets] = await Promise.all([
       storageService.getCommunityFeed(),
@@ -146,30 +152,41 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
   const trimmedQuery = query.trim().normalize('NFC').toLocaleLowerCase();
   const searchedTag = officialTag(trimmedQuery);
-  const filteredPosts = posts.filter((post) => {
-    if (filterMode === 'user' && post.isExample) return false;
-    if (filterMode === 'example' && !post.isExample) return false;
-    const tags = postTags(post).official;
-    if (tagFilter && !tags.includes(tagFilter)) return false;
-    if (!trimmedQuery) return true;
-    if (trimmedQuery.startsWith('#') || searchedTag) {
-      return Boolean(searchedTag && tags.includes(searchedTag));
-    }
-    return searchablePostText(post).includes(trimmedQuery) ||
-      tags.some((tag) => tag.toLocaleLowerCase().includes(trimmedQuery));
-  });
+  const filteredPosts = useMemo(
+    () =>
+      posts.filter((post) => {
+        if (filterMode === 'user' && post.isExample) return false;
+        if (filterMode === 'example' && !post.isExample) return false;
+        const tags = postTags(post).official;
+        if (tagFilter && !tags.includes(tagFilter)) return false;
+        if (!trimmedQuery) return true;
+        if (trimmedQuery.startsWith('#') || searchedTag) {
+          return Boolean(searchedTag && tags.includes(searchedTag));
+        }
+        return (
+          searchablePostText(post).includes(trimmedQuery) ||
+          tags.some((tag) => tag.toLocaleLowerCase().includes(trimmedQuery))
+        );
+      }),
+    [posts, filterMode, tagFilter, trimmedQuery, searchedTag]
+  );
 
   const selectedPost = posts.find((post) => post.id === selectedPostId);
   const detailOpen = Boolean(selectedPost) && !showCreateForm;
   const selectedComments = selectedPost ? commentsByPost[selectedPost.id] ?? [] : [];
-  const popular = [...posts].sort((a, b) => b.likes - a.likes || b.createdAt - a.createdAt).slice(0, 5);
-  const today = new Date().toDateString();
-  const tagCounts = new Map<string, number>();
-  for (const post of posts) {
-    if (new Date(post.createdAt).toDateString() !== today) continue;
-    for (const tag of postTags(post).official) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
-  }
-  const todaysTags = [...tagCounts].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
+  const popular = useMemo(
+    () => [...posts].sort((a, b) => b.likes - a.likes || b.createdAt - a.createdAt).slice(0, 5),
+    [posts]
+  );
+  const todaysTags = useMemo(() => {
+    const today = new Date().toDateString();
+    const tagCounts = new Map<string, number>();
+    for (const post of posts) {
+      if (new Date(post.createdAt).toDateString() !== today) continue;
+      for (const tag of postTags(post).official) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+    }
+    return [...tagCounts].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
+  }, [posts]);
 
   useLayoutEffect(() => {
     if (selectedPost || showCreateForm) return;

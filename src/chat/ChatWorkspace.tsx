@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ChatRoom,
   Character,
@@ -86,8 +86,11 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const [showRoomSettingsModal, setShowRoomSettingsModal] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const activeRoomIdRef = useRef<string | null>(activeRoom?.id ?? null);
+  const memoryStatusTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    activeRoomIdRef.current = activeRoom?.id ?? null;
     if (activeRoom) {
       setCurrentMode(activeRoom.mode);
       setAiError(null);
@@ -96,14 +99,24 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   }, [activeRoom?.id]);
 
   useEffect(() => {
+    return () => {
+      if (memoryStatusTimerRef.current !== null) {
+        window.clearTimeout(memoryStatusTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, currentMode, isGenerating]);
 
   const loadRoomMessagesAndMemories = async (room: ChatRoom) => {
+    const targetRoomId = room.id;
     const [msgs, story] = await Promise.all([
-      storageService.getMessagesByRoom(room.id),
+      storageService.getMessagesByRoom(targetRoomId),
       storageService.getStoryMemory(room.characterId),
     ]);
+    if (activeRoomIdRef.current !== targetRoomId) return;
     setMessages(msgs);
     setStoryMemory(story);
     setKeyMemories(story.keyMemories || []);
@@ -174,7 +187,13 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
     setStoryMemory(saved);
     setKeyMemories(saved.keyMemories || []);
     setMemorySaveStatus(statusMsg);
-    setTimeout(() => setMemorySaveStatus(null), 3000);
+    if (memoryStatusTimerRef.current !== null) {
+      window.clearTimeout(memoryStatusTimerRef.current);
+    }
+    memoryStatusTimerRef.current = window.setTimeout(() => {
+      setMemorySaveStatus(null);
+      memoryStatusTimerRef.current = null;
+    }, 3000);
   };
 
   const handleAddKeyMemory = async () => {
@@ -217,33 +236,38 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       return;
     }
 
+    const targetRoomId = activeRoom.id;
+    const targetMode = currentMode;
+
     setAiError(null);
     setInputText('');
 
     const userMsg = await storageService.addMessage({
-      roomId: activeRoom.id,
+      roomId: targetRoomId,
       sender: 'user',
       content: userText,
-      mode: currentMode,
-      isSavedFromCleanup: currentMode === 'story',
+      mode: targetMode,
+      isSavedFromCleanup: targetMode === 'story',
     });
 
-    const afterUserMsgs = await storageService.getMessagesByRoom(activeRoom.id);
-    setMessages(afterUserMsgs);
+    const afterUserMsgs = await storageService.getMessagesByRoom(targetRoomId);
+    if (activeRoomIdRef.current === targetRoomId) {
+      setMessages(afterUserMsgs);
+    }
     onRoomUpdated();
 
     if (character) {
       setIsGenerating(true);
       try {
         const modeHistory = afterUserMsgs.filter(
-          (m) => m.mode === currentMode && m.id !== userMsg.id
+          (m) => m.mode === targetMode && m.id !== userMsg.id
         );
 
         const aiResult = await aiService.generateChatResponse({
           character,
           roomPromptOverride: activeRoom.promptOverride || null,
           userProfile,
-          mode: currentMode,
+          mode: targetMode,
           history: modeHistory,
           storyMemory: storyMemory ? { ...storyMemory, keyMemories } : null,
           makjangMode: Boolean(activeRoom.makjangMode),
@@ -256,20 +280,24 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           .join('\n');
 
         await storageService.addMessage({
-          roomId: activeRoom.id,
+          roomId: targetRoomId,
           sender: 'character',
           content: combinedContent,
           segments: aiResult.segments,
           narratorSceneType: aiResult.sceneType,
-          mode: currentMode,
-          isSavedFromCleanup: currentMode === 'story',
+          mode: targetMode,
+          isSavedFromCleanup: targetMode === 'story',
         });
 
-        const finalMsgs = await storageService.getMessagesByRoom(activeRoom.id);
-        setMessages(finalMsgs);
+        const finalMsgs = await storageService.getMessagesByRoom(targetRoomId);
+        if (activeRoomIdRef.current === targetRoomId) {
+          setMessages(finalMsgs);
+        }
         onRoomUpdated();
       } catch (err) {
-        setAiError(err instanceof Error ? err.message : 'AI 응답 생성 중 오류가 발생했습니다.');
+        if (activeRoomIdRef.current === targetRoomId) {
+          setAiError(err instanceof Error ? err.message : 'AI 응답 생성 중 오류가 발생했습니다.');
+        }
       } finally {
         setIsGenerating(false);
       }
@@ -277,12 +305,18 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   };
 
   const handleToggleBookmark = async (msgId: string) => {
+    const targetRoomId = activeRoom.id;
     await storageService.toggleMessageBookmark(msgId);
-    const updatedMsgs = await storageService.getMessagesByRoom(activeRoom.id);
-    setMessages(updatedMsgs);
+    const updatedMsgs = await storageService.getMessagesByRoom(targetRoomId);
+    if (activeRoomIdRef.current === targetRoomId) {
+      setMessages(updatedMsgs);
+    }
   };
 
-  const filteredMessages = messages.filter((m) => m.mode === currentMode);
+  const filteredMessages = useMemo(
+    () => messages.filter((m) => m.mode === currentMode),
+    [messages, currentMode]
+  );
 
   return (
     <div className="relative flex h-full w-full overflow-hidden">

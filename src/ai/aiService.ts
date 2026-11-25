@@ -180,9 +180,18 @@ export const aiService = {
       body: JSON.stringify(requestPayload),
     });
 
-    const data = await response.json();
+    let data: Partial<AiChatResponse> & { error?: string } = {};
+    try {
+      data = await response.json();
+    } catch {
+      if (!response.ok) {
+        throw new Error(`서버 응답 오류가 발생했습니다 (HTTP ${response.status}).`);
+      }
+      throw new Error('서버 응답 데이터를 해석할 수 없습니다.');
+    }
+
     if (!response.ok) {
-      throw new Error(data.error || 'AI 응답 생성 요청에 실패했습니다.');
+      throw new Error(data.error || `AI 응답 생성 요청에 실패했습니다 (HTTP ${response.status}).`);
     }
 
     return data as AiChatResponse;

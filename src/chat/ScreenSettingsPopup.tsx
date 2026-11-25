@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ChatRoom,
   CustomizationSettings,
@@ -103,6 +103,11 @@ export const ScreenSettingsPopup: React.FC<ScreenSettingsPopupProps> = ({
   const fullSkinInputRef = useRef<HTMLInputElement>(null);
   const opponentBubbleInputRef = useRef<HTMLInputElement>(null);
   const userBubbleInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setPendingBubbles(getInitialBubbles(scope));
+  }, [isOpen, scope, activeRoom?.id, activeRoom?.updatedAt, globalCustomization.updatedAt]);
 
   if (!isOpen) return null;
 

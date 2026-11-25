@@ -27,6 +27,42 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+import { useCharacterSkin } from './characterSkin';
+import './characterManagement.css';
+
+const densityOptions = [['large', '크게'], ['medium', '보통'], ['small', '작게']] as const;
+type CharacterDensity = (typeof densityOptions)[number][0];
+const densityPreference = 'lovy-character-card-density';
+
+function readDensity(): CharacterDensity {
+  try {
+    const stored = localStorage.getItem(densityPreference);
+    return densityOptions.find(([value]) => value === stored)?.[0] ?? 'large';
+  } catch {
+    return 'large';
+  }
+}
+
+function CharacterFields({ character, compact = false }: { character: Character; compact?: boolean }) {
+  const speech = character.speechAndBehavior ||
+    String(character.customSettings?.speechAndBehavior || character.customSettings?.greetingStyle || '');
+  const fields = [
+    ['캐릭터 정보 및 성격', character.systemPrompt],
+    ['말투 및 행동 특성', speech],
+    ['세계관 설정', character.worldView],
+  ];
+  return (
+    <dl className="character-fields">
+      {fields.filter(([, text]) => text).map(([label, text]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd className={compact ? 'line-clamp-3' : undefined}>{text}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 interface CharacterManagerProps {
   userProfile: UserProfile | null;
   autoOpenPersonaEditor?: boolean;
@@ -408,18 +444,46 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
     e.target.value = '';
   };
 
+  const skin = useCharacterSkin();
+  const [density, setDensity] = useState<CharacterDensity>(readDensity);
+  const [detailChar, setDetailChar] = useState<Character | null>(null);
+  const detailRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (detailChar && !detailRef.current?.open) detailRef.current?.showModal();
+  }, [detailChar]);
+
+  const chooseDensity = (next: CharacterDensity) => {
+    setDensity(next);
+    try {
+      localStorage.setItem(densityPreference, next);
+    } catch {
+      // The current session can still use the selected layout.
+    }
+  };
+  const hasPersonaDetails = Boolean(userProfile && [
+    userProfile.appearance, userProfile.personality, userProfile.bio, userProfile.additionalInfo,
+  ].some((value) => value?.trim()));
+
   return (
-    <div className="flex flex-col h-full bg-slate-950/75 text-slate-100 overflow-y-auto p-4 sm:p-6 space-y-6">
+    <section className="character-page" style={skin} aria-label="캐릭터 관리">
+    <div className="character-page-scroll">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-indigo-500/30 pb-4">
+      <div className="character-tools">
         <div>
-          <h2 className="text-xl font-bold text-white tracking-tight">캐릭터 생성 및 관리</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">캐릭터 생성 및 관리</h2>
           <p className="text-xs text-slate-400 mt-1">
             캐릭터 정보, 성격, 말투 및 행동 특성, 세계관 설정은 캐릭터에 귀속되며 모든 채팅방에서 자동으로 참조됩니다.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="character-tool-buttons">
+          <div className="character-density" role="group" aria-label="카드 표시 크기">
+            {densityOptions.map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={value === density} onClick={() => chooseDensity(value)}>
+                {label}
+              </button>
+            ))}
+          </div>
           <input
             ref={jsonImportRef}
             type="file"
@@ -430,7 +494,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
           <button
             type="button"
             onClick={() => jsonImportRef.current?.click()}
-            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-indigo-500/30 text-xs font-medium text-indigo-200 flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+            className="character-control character-control--cyan"
           >
             <FileJson size={14} className="text-sky-400" />
             <span>캐릭터 JSON 가져오기</span>
@@ -439,7 +503,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
           <button
             type="button"
             onClick={handleStartCreate}
-            className="min-h-[40px] px-4 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-semibold text-white flex items-center gap-1.5 shadow-lg shadow-pink-600/20 transition-colors whitespace-nowrap shrink-0"
+            className="character-control character-control--primary"
           >
             <UserPlus size={15} />
             <span>새 캐릭터 추가</span>
@@ -476,22 +540,27 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
       {/* Section 4: Dedicated 「나의 분신」 Management Area (Visually Distinct from AI Characters) */}
       <section
         ref={personaSectionRef}
-        className="p-5 rounded-2xl bg-gradient-to-br from-emerald-950/35 via-slate-900/95 to-pink-950/25 border-2 border-emerald-500/40 space-y-4 shadow-xl"
+        className="character-persona"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 pb-3.5">
+        <div className="character-persona-head">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center shrink-0">
-              <UserCircle2 size={20} className="text-emerald-300" />
-            </div>
+            {userProfile?.avatarAssetId && assetUrls[userProfile.avatarAssetId] ? (
+              <img src={assetUrls[userProfile.avatarAssetId]} alt="" referrerPolicy="no-referrer"
+                className="w-11 h-11 rounded-xl border border-cyan-300/50 object-cover shrink-0" />
+            ) : (
+              <div className="w-11 h-11 rounded-xl bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center shrink-0">
+                <UserCircle2 size={22} className="text-cyan-300" />
+              </div>
+            )}
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-extrabold text-white">나의 분신</h3>
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-200 border border-cyan-400/40">
                   사용자 프로필
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-0.5">
-                AI 캐릭터와 사회자가 당신을 알아볼 수 있도록 이야기 속에서 사용할 나의 분신을 관리합니다.
+                {userProfile ? userProfile.name : '실제 AI 캐릭터와 대화하기 전에 나의 분신을 등록해 주세요.'}
               </p>
             </div>
           </div>
@@ -500,7 +569,7 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
             <button
               type="button"
               onClick={() => setIsEditingPersona(true)}
-              className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white flex items-center gap-1.5 shadow-lg shadow-emerald-600/20 shrink-0"
+              className="character-control character-control--cyan"
             >
               <Edit3 size={14} />
               <span>{userProfile ? '나의 분신 수정' : '나의 분신 만들기'}</span>
@@ -638,82 +707,23 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
               </div>
             </div>
           </form>
-        ) : userProfile ? (
-          <div className="p-4 rounded-xl bg-slate-950/80 border border-emerald-500/25 flex flex-col sm:flex-row items-start gap-4">
-            {userProfile.avatarAssetId && assetUrls[userProfile.avatarAssetId] ? (
-              <img
-                src={assetUrls[userProfile.avatarAssetId]}
-                alt={userProfile.name}
-                referrerPolicy="no-referrer"
-                className="w-16 h-16 rounded-2xl border border-emerald-400/50 object-cover shrink-0"
-              />
-            ) : (
-              <div className="w-16 h-16 rounded-2xl border border-emerald-500/30 bg-emerald-950/40 flex items-center justify-center shrink-0">
-                <UserCircle2 size={28} className="text-emerald-300" />
-              </div>
-            )}
-            <div className="flex-1 min-w-0 space-y-2 text-xs">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-base font-bold text-white">{userProfile.name}</span>
-                <span className="text-[11px] text-emerald-300">· 모든 AI 캐릭터 및 사회자가 참조 중</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {userProfile.appearance?.trim() && (
-                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
-                    <div className="text-[11px] font-semibold text-emerald-300">외모</div>
-                    <p className="text-slate-200 mt-0.5 whitespace-pre-line leading-relaxed">
-                      {userProfile.appearance}
-                    </p>
-                  </div>
-                )}
-                {userProfile.personality?.trim() && (
-                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
-                    <div className="text-[11px] font-semibold text-pink-300">성격</div>
-                    <p className="text-slate-200 mt-0.5 whitespace-pre-line leading-relaxed">
-                      {userProfile.personality}
-                    </p>
-                  </div>
-                )}
-              </div>
-              {(userProfile.bio?.trim() || userProfile.additionalInfo?.trim()) && (
-                <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
-                  <div className="text-[11px] font-semibold text-sky-300">자기소개 및 추가 설정</div>
-                  <p className="text-slate-200 mt-0.5 whitespace-pre-line leading-relaxed">
-                    {[userProfile.bio, userProfile.additionalInfo].filter(Boolean).join('\n\n')}
-                  </p>
-                </div>
-              )}
-              {!userProfile.appearance?.trim() &&
-                !userProfile.personality?.trim() &&
-                !userProfile.bio?.trim() &&
-                !userProfile.additionalInfo?.trim() && (
-                  <p className="text-slate-400">
-                    추가 선택 항목은 비어 있습니다. 필요 시 우측의 [나의 분신 수정]에서 자유롭게 입력할 수 있습니다.
-                  </p>
-                )}
-            </div>
-          </div>
-        ) : (
-          <div className="p-4 rounded-xl bg-slate-950/70 border border-dashed border-emerald-500/35 text-xs text-slate-300 flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-1">
-              <div className="font-bold text-white">아직 등록된 나의 분신이 없습니다.</div>
-              <p className="text-slate-400">
-                실제 AI 캐릭터와 대화를 시작하기 전에 이름 또는 닉네임을 등록해 주세요. 안내 라비는 분신 없이도 이용할 수 있습니다.
-              </p>
-            </div>
-          </div>
-        )}
+        ) : userProfile && hasPersonaDetails ? (
+          <details>
+            <summary>추가 설정</summary>
+            <dl className="character-fields mt-2">
+              {[
+                ['외모', userProfile.appearance],
+                ['성격', userProfile.personality],
+                ['자기소개 및 추가 설정', [userProfile.bio, userProfile.additionalInfo].filter(Boolean).join('\n\n')],
+              ].filter(([, text]) => text?.trim()).map(([label, text]) => (
+                <div key={label}><dt>{label}</dt><dd>{text}</dd></div>
+              ))}
+            </dl>
+          </details>
+        ) : null}
       </section>
 
-      {/* Visual Separator between 「나의 분신」 and AI Characters */}
-      <div className="flex items-center justify-between pt-2 border-t border-indigo-500/25">
-        <div>
-          <h3 className="text-sm font-bold text-indigo-200">AI 캐릭터 및 안내 라비 목록</h3>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            등록된 AI 캐릭터({characters.filter((c) => c.id !== GUIDE_RAVI_ID).length}명) 및 시스템 안내 도우미 라비
-          </p>
-        </div>
-      </div>
+      <h3 className="character-list-heading text-lg font-bold">AI 캐릭터 및 안내 라비 목록</h3>
 
       {/* Create / Edit Form Section */}
       {(isCreating || editingChar) && (
@@ -967,120 +977,217 @@ export const CharacterManager: React.FC<CharacterManagerProps> = ({
         </div>
       )}
 
-      {/* Character Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="character-grid" data-density={density}>
         {characters.map((char) => {
           const isGuide = char.id === GUIDE_RAVI_ID || char.isSystemGuide;
           const avatarSrc = assetUrls[char.avatarAssetId] || DEFAULT_AVATARS.ravi;
-          const speechText =
+          const speechSummary =
             char.speechAndBehavior ||
             String(char.customSettings?.speechAndBehavior || char.customSettings?.greetingStyle || '');
+          const mediumSummary = [char.systemPrompt, speechSummary, char.worldView]
+            .map((v) => v?.trim())
+            .filter(Boolean)
+            .join(' · ');
 
           return (
-            <div
-              key={char.id}
-              className={`p-5 rounded-2xl border flex flex-col justify-between gap-4 transition-colors ${
-                isGuide
-                  ? 'bg-indigo-950/40 border-indigo-500/40'
-                  : 'bg-slate-900/90 border-slate-800 hover:border-indigo-500/40'
-              }`}
-            >
-              <div className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <img
-                      src={avatarSrc}
-                      alt={char.name}
-                      referrerPolicy="no-referrer"
-                      className="w-14 h-14 rounded-2xl border border-indigo-500/40 object-cover shrink-0"
-                    />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-base font-bold text-white truncate">{char.name}</h3>
-                        {isGuide && (
-                          <span className="text-[11px] text-pink-400 font-medium shrink-0">
-                            · 시스템 고정
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">{char.description}</p>
-                      <div className="text-[11px] text-slate-500 font-mono mt-1 tabular-nums">
+            <article key={char.id} className="character-card">
+              <button
+                type="button"
+                className="character-card-heading"
+                onClick={() => setDetailChar(char)}
+                aria-label={`${char.name} 상세 보기`}
+              >
+                <img src={avatarSrc} alt="" referrerPolicy="no-referrer" />
+                <span className="min-w-0 space-y-1">
+                  <span className={`block font-bold leading-tight ${density === 'small' ? 'line-clamp-2 text-xs sm:text-sm' : 'text-base line-clamp-2'}`}>
+                    {char.name}
+                  </span>
+                  {isGuide && <span className="block text-[11px] text-pink-300">시스템 고정</span>}
+                  {density !== 'small' && (
+                    <>
+                      <span className="block text-xs text-slate-300 line-clamp-2">
+                        {char.description || (density === 'medium' ? char.systemPrompt : '')}
+                      </span>
+                      <span className="block text-[11px] text-slate-400 font-mono truncate">
                         ID: {char.id} · v{char.schemaVersion}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 text-xs text-slate-300 space-y-2">
-                  <div>
-                    <div className="font-semibold text-indigo-300 text-[11px]">캐릭터 정보 및 성격</div>
-                    <p className="line-clamp-2 text-slate-300 leading-relaxed mt-0.5">{char.systemPrompt}</p>
-                  </div>
-
-                  {speechText && (
-                    <div className="pt-1.5 border-t border-slate-800/80">
-                      <div className="font-semibold text-pink-300 text-[11px]">말투 및 행동 특성</div>
-                      <p className="line-clamp-2 text-slate-300 leading-relaxed mt-0.5">{speechText}</p>
-                    </div>
+                      </span>
+                    </>
                   )}
+                </span>
+              </button>
 
-                  {char.worldView && (
-                    <div className="pt-1.5 border-t border-slate-800/80">
-                      <div className="font-semibold text-sky-300 text-[11px]">세계관 설정</div>
-                      <p className="line-clamp-2 text-slate-300 leading-relaxed mt-0.5">{char.worldView}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
+              {density === 'medium' && mediumSummary && (
+                <p className="character-summary-snippet line-clamp-2">{mediumSummary}</p>
+              )}
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800/80">
+              {density === 'large' && <CharacterFields character={char} compact />}
+
+              <div className="character-actions">
                 <button
                   type="button"
                   onClick={() => onOpenChatWithCharacter(char.id)}
-                  className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-500 text-xs font-semibold text-white flex items-center gap-1.5 transition-colors"
+                  className="character-control"
+                  aria-label={isGuide ? '안내 라비 채널 열기' : '대화방 이동'}
+                  title={isGuide ? '안내 라비 채널 열기' : '대화방 이동'}
                 >
-                  <MessageSquare size={13} />
-                  <span>{isGuide ? '안내 라비 채널 열기' : '대화방 이동'}</span>
+                  <MessageSquare size={14} aria-hidden="true" />
+                  <span>
+                    {density === 'medium'
+                      ? isGuide
+                        ? '채널'
+                        : '대화'
+                      : isGuide
+                      ? '안내 라비 채널 열기'
+                      : '대화방 이동'}
+                  </span>
                 </button>
-
                 {isGuide ? (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400 px-2.5 py-1.5 rounded-lg bg-slate-950/60 border border-slate-800">
-                    <Lock size={12} className="text-pink-400" />
-                    <span>삭제·수정 보호됨</span>
+                  <div className="character-control" title="삭제·수정 보호됨" aria-label="삭제·수정 보호됨">
+                    <Lock size={13} aria-hidden="true" />
+                    <span>{density === 'medium' ? '보호됨' : '삭제·수정 보호됨'}</span>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1.5">
+                  <>
                     <button
                       type="button"
                       onClick={() => handleExportCharacterJson(char)}
+                      className="character-control"
                       title="캐릭터 JSON 내보내기"
-                      className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 flex items-center gap-1"
+                      aria-label="캐릭터 JSON 내보내기"
                     >
-                      <Download size={13} />
+                      <Download size={14} aria-hidden="true" />
+                      <span>{density === 'medium' ? 'JSON' : 'JSON 내보내기'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => handleStartEdit(char)}
-                      className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-indigo-300 flex items-center gap-1"
+                      className="character-control"
+                      title="수정"
+                      aria-label="수정"
                     >
-                      <Edit3 size={13} />
+                      <Edit3 size={14} aria-hidden="true" />
                       <span>수정</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setDeleteTarget(char)}
-                      className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-red-950/70 border border-slate-800 hover:border-red-500/40 text-xs text-red-400 flex items-center gap-1"
+                      className="character-control character-control--danger"
+                      title="삭제"
+                      aria-label="삭제"
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={14} aria-hidden="true" />
                       <span>삭제</span>
                     </button>
+                  </>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <dialog
+        ref={detailRef}
+        className="character-detail-dialog"
+        aria-labelledby="character-detail-title"
+        onClose={() => setDetailChar(null)}
+        onClick={(e) => {
+          if (e.target === detailRef.current) detailRef.current?.close();
+        }}
+      >
+        {detailChar && (() => {
+          const isGuideDetail = detailChar.id === GUIDE_RAVI_ID || detailChar.isSystemGuide;
+          return (
+            <div className="character-detail">
+              <div className="flex items-start justify-between gap-3">
+                <div className="character-card-heading">
+                  <img
+                    src={assetUrls[detailChar.avatarAssetId] || DEFAULT_AVATARS.ravi}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="min-w-0 space-y-1">
+                    <h3 id="character-detail-title">{detailChar.name}</h3>
+                    {isGuideDetail && (
+                      <p className="text-xs text-pink-300">시스템 고정 · 삭제·수정 보호됨</p>
+                    )}
+                    <p className="text-xs text-slate-300 whitespace-pre-wrap">{detailChar.description}</p>
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      ID: {detailChar.id} · v{detailChar.schemaVersion}
+                    </p>
                   </div>
+                </div>
+                <button
+                  type="button"
+                  className="character-control shrink-0"
+                  aria-label="상세 닫기"
+                  onClick={() => detailRef.current?.close()}
+                  autoFocus
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <CharacterFields character={detailChar} />
+              <div className="character-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = detailChar.id;
+                    detailRef.current?.close();
+                    onOpenChatWithCharacter(id);
+                  }}
+                  className="character-control character-control--primary"
+                >
+                  <MessageSquare size={14} aria-hidden="true" />
+                  <span>{isGuideDetail ? '안내 라비 채널 열기' : '대화방 이동'}</span>
+                </button>
+                {isGuideDetail ? (
+                  <div className="character-control" aria-label="삭제·수정 보호됨">
+                    <Lock size={13} aria-hidden="true" />
+                    <span>삭제·수정 보호됨</span>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleExportCharacterJson(detailChar)}
+                      className="character-control"
+                    >
+                      <Download size={14} aria-hidden="true" />
+                      <span>JSON 내보내기</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = detailChar;
+                        detailRef.current?.close();
+                        handleStartEdit(target);
+                      }}
+                      className="character-control"
+                    >
+                      <Edit3 size={14} aria-hidden="true" />
+                      <span>수정</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = detailChar;
+                        detailRef.current?.close();
+                        setDeleteTarget(target);
+                      }}
+                      className="character-control character-control--danger"
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      <span>삭제</span>
+                    </button>
+                  </>
                 )}
               </div>
             </div>
           );
-        })}
-      </div>
+        })()}
+      </dialog>
     </div>
+    </section>
   );
 };

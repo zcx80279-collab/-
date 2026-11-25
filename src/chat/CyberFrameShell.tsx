@@ -1,7 +1,7 @@
 import React from 'react';
 import { MessageSquareText, User, Users, Settings } from 'lucide-react';
 
-export type MainMenuTab = 'chat' | 'community' | 'characters' | 'settings' | 'report';
+export type MainMenuTab = 'chat' | 'community' | 'characters' | 'settings' | 'developer' | 'report';
 
 interface CyberFrameShellProps {
   activeTab: MainMenuTab;

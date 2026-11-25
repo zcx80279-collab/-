@@ -19,15 +19,48 @@ interface PromptFilesCache {
   scenes: Record<NormalNarratorSceneType, string>;
 }
 
+const NARRATOR_FILES = [
+  'common.md',
+  'routing.md',
+  'makjang.md',
+  'daily.md',
+  'romance.md',
+  'exploration.md',
+  'combat.md',
+  'trpg.md',
+] as const;
+
+let cachedPrompts: PromptFilesCache | null = null;
+let cachedPromptsMtimeMax = 0;
+
 /**
- * Loads the narrator prompt markdown files directly from src/prompts/narrator/*.md
+ * Loads the narrator prompt markdown files from src/prompts/narrator/*.md
+ * Uses an in-memory cache with fast mtime validation so dev edits reflect immediately
+ * without reading 8 files from disk on every request when unchanged.
  */
 function loadNarratorPrompts(): PromptFilesCache {
   const baseDir = path.resolve(__dirname, 'src/prompts/narrator');
+  let latestMtime = 0;
+  for (const fileName of NARRATOR_FILES) {
+    try {
+      const stat = fs.statSync(path.join(baseDir, fileName));
+      if (stat.mtimeMs > latestMtime) {
+        latestMtime = stat.mtimeMs;
+      }
+    } catch {
+      // Fallback to reload if stat fails
+      latestMtime = Date.now();
+    }
+  }
+
+  if (cachedPrompts && latestMtime <= cachedPromptsMtimeMax) {
+    return cachedPrompts;
+  }
+
   const readMd = (fileName: string) =>
     fs.readFileSync(path.join(baseDir, fileName), 'utf-8').trim();
 
-  return {
+  cachedPrompts = {
     common: readMd('common.md'),
     routing: readMd('routing.md'),
     makjang: readMd('makjang.md'),
@@ -39,7 +72,27 @@ function loadNarratorPrompts(): PromptFilesCache {
       trpg: readMd('trpg.md'),
     },
   };
+  cachedPromptsMtimeMax = latestMtime;
+  return cachedPrompts;
 }
+
+const SCENE_PATTERNS: Record<NormalNarratorSceneType, RegExp[]> = {
+  combat: [
+    /공격|방어|회피|전투|싸움|검을|총을|마법을|스킬|적의|적을|대립|기습|무기|타격|반격|결투|위협|돌진/gi,
+  ],
+  exploration: [
+    /탐색|탐험|발견|단서|살펴본|조사해|주변을|장소|지형|이동해|문을 열|통로|유적|숲속|동굴|건물 안|흔적/gi,
+  ],
+  trpg: [
+    /의뢰|사건|퀘스트|임무|수사|추리|선택지|길드|NPC|단서를 종합|작전|함정|퍼즐|협상|잠입/gi,
+  ],
+  romance: [
+    /설레|심장|고백|손을 잡|안아|포옹|입맞춤|키스|얼굴이 붉|부끄러|사랑|호감|다정하게 바라|가까워|연인|데이트/gi,
+  ],
+  daily: [
+    /식사|산책|휴식|커피|차 한잔|안녕|오늘|일상|먹는|마시는|웃으며|이야기|수다|집에서|카페|평소/gi,
+  ],
+};
 
 /**
  * Context-aware scene analyzer that selects the active and (only when shifting) candidate scene type
@@ -55,27 +108,9 @@ function selectRelevantSceneTypes(
   const latestText = userMessage.toLowerCase();
 
   const scoreScene = (text: string, weight: number, scores: Record<NormalNarratorSceneType, number>) => {
-    const patterns: Record<NormalNarratorSceneType, RegExp[]> = {
-      combat: [
-        /공격|방어|회피|전투|싸움|검을|총을|마법을|스킬|적의|적을|대립|기습|무기|타격|반격|결투|위협|돌진/,
-      ],
-      exploration: [
-        /탐색|탐험|발견|단서|살펴본|조사해|주변을|장소|지형|이동해|문을 열|통로|유적|숲속|동굴|건물 안|흔적/,
-      ],
-      trpg: [
-        /의뢰|사건|퀘스트|임무|수사|추리|선택지|길드|NPC|단서를 종합|작전|함정|퍼즐|협상|잠입/i,
-      ],
-      romance: [
-        /설레|심장|고백|손을 잡|안아|포옹|입맞춤|키스|얼굴이 붉|부끄러|사랑|호감|다정하게 바라|가까워|연인|데이트/,
-      ],
-      daily: [
-        /식사|산책|휴식|커피|차 한잔|안녕|오늘|일상|먹는|마시는|웃으며|이야기|수다|집에서|카페|평소/,
-      ],
-    };
-
-    (Object.keys(patterns) as NormalNarratorSceneType[]).forEach((scene) => {
-      for (const regex of patterns[scene]) {
-        const matches = text.match(new RegExp(regex.source, 'gi'));
+    (Object.keys(SCENE_PATTERNS) as NormalNarratorSceneType[]).forEach((scene) => {
+      for (const regex of SCENE_PATTERNS[scene]) {
+        const matches = text.match(regex);
         if (matches && matches.length > 0) {
           scores[scene] += matches.length * weight;
         }
@@ -368,7 +403,11 @@ async function startServer() {
         },
       });
 
-      const rawJson = (response.text ?? '{}').trim();
+      const rawJson = (response.text ?? '{}')
+        .trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
       let parsed: {
         sceneType?: string;
         segments?: Array<{ type: string; text: string }>;
@@ -388,10 +427,11 @@ async function startServer() {
         ? (parsed.sceneType as NormalNarratorSceneType)
         : normalizedNormalScene;
 
-      const cleanSegments = (parsed.segments || [])
+      const rawSegments = Array.isArray(parsed.segments) ? parsed.segments : [];
+      const cleanSegments = rawSegments
         .map((seg) => ({
-          type: (seg.type === 'narrator' ? 'narrator' : 'dialogue') as 'narrator' | 'dialogue',
-          text: (seg.text || '')
+          type: (seg?.type === 'narrator' ? 'narrator' : 'dialogue') as 'narrator' | 'dialogue',
+          text: String(seg?.text ?? '')
             .replace(/^(사회자\s*묘사\s*:|사회자\s*:|막장\s*사회자\s*:)/i, '')
             .trim(),
         }))

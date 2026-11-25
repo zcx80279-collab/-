@@ -32,6 +32,12 @@ export function CommunityPostDetail({
   }, []);
 
   useEffect(() => {
+    if (characters.length > 0 && !characters.some((c) => c.id === authorId)) {
+      setAuthorId(characters[0].id);
+    }
+  }, [characters, authorId]);
+
+  useEffect(() => {
     let current = true;
     storageService.getCommunityLike(post.id).then((result) => {
       if (current) setLiked(result);

@@ -132,26 +132,32 @@ export const storageService = {
     const db = await getDb();
     const referencedBy: string[] = [];
 
-    const characters = await db.getAll('characters');
+    const [characters, userProfRaw, communityItems, customRaw, rooms] = await Promise.all([
+      db.getAll('characters'),
+      db.get('settings', 'user_profile'),
+      db.getAll('community'),
+      db.get('settings', 'customization'),
+      db.getAll('rooms'),
+    ]);
+
     for (const c of characters) {
       if (c.avatarAssetId === assetId) {
         referencedBy.push(`캐릭터 프로필: ${c.name}`);
       }
     }
 
-    const userProf = (await db.get('settings', 'user_profile')) as UserProfile | undefined;
+    const userProf = userProfRaw as UserProfile | undefined;
     if (userProf && userProf.avatarAssetId === assetId) {
       referencedBy.push(`나의 분신 프로필: ${userProf.name}`);
     }
 
-    const communityItems = await db.getAll('community');
     for (const item of communityItems) {
       if (item.recordType === 'post' && item.post?.imageAssetId === assetId) {
         referencedBy.push(`커뮤니티 게시글: ${item.post.title}`);
       }
     }
 
-    const custom = (await db.get('settings', 'customization')) as CustomizationSettings | undefined;
+    const custom = customRaw as CustomizationSettings | undefined;
     if (custom) {
       if (custom.frameAssetId === assetId) referencedBy.push('공용 기본 외부 프레임 스킨');
       if (custom.chatBackgroundAssetId === assetId) referencedBy.push('공용 기본 채팅방 배경 스킨');
@@ -167,7 +173,6 @@ export const storageService = {
       if (custom.bubbles?.userBubbleAssetId === assetId) referencedBy.push('공용 사용자 말풍선 PNG');
     }
 
-    const rooms = await db.getAll('rooms');
     for (const room of rooms) {
       const rc = room.customization;
       if (!rc) continue;
@@ -725,18 +730,28 @@ export const storageService = {
   // --- BACKUP & EXPORT INTERFACE ---
   async exportSnapshotJson(): Promise<string> {
     const db = await getDb();
+    const [characters, rooms, messages, stories, community, settings, allAssets] =
+      await Promise.all([
+        db.getAll('characters'),
+        db.getAll('rooms'),
+        db.getAll('messages'),
+        db.getAll('stories'),
+        db.getAll('community'),
+        db.getAll('settings'),
+        db.getAll('assets'),
+      ]);
     const snapshot = {
       appName: '러비러비톡 (Lovy Lovy Talk)',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       exportedAt: new Date().toISOString(),
       stores: {
-        characters: await db.getAll('characters'),
-        rooms: await db.getAll('rooms'),
-        messages: await db.getAll('messages'),
-        stories: await db.getAll('stories'),
-        community: await db.getAll('community'),
-        settings: await db.getAll('settings'),
-        assetsMetadata: (await db.getAll('assets')).map((a) => ({
+        characters,
+        rooms,
+        messages,
+        stories,
+        community,
+        settings,
+        assetsMetadata: allAssets.map((a) => ({
           id: a.id,
           name: a.name,
           type: a.type,

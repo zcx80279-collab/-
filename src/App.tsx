@@ -18,8 +18,10 @@ import { ChatWorkspace } from './chat/ChatWorkspace';
 import { CyberFrameShell, MainMenuTab } from './chat/CyberFrameShell';
 import { ScreenSettingsPopup } from './chat/ScreenSettingsPopup';
 import { CommunityFeed } from './community/CommunityFeed';
+import { CharacterRabbit } from './characters/characterSkin';
 import { CharacterManager } from './characters/CharacterManager';
 import { SettingsPanel } from './core/SettingsPanel';
+import { DeveloperPage } from './developer/DeveloperPage';
 import { VerificationReportModal } from './core/VerificationReportModal';
 import { UpdateModal } from './components/UpdateModal';
 import { platformService } from './platform/platformService';
@@ -66,6 +68,7 @@ export default function App() {
   const [initError, setInitError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('chat');
+  const [developerAuthenticated, setDeveloperAuthenticated] = useState(false);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
@@ -135,6 +138,10 @@ export default function App() {
   const [updateState, setUpdateState] = useState<UpdateState>(() => updateService.getState());
 
   useEffect(() => {
+    if (activeTab !== 'developer') setDeveloperAuthenticated(false);
+  }, [activeTab]);
+
+  useEffect(() => {
     initializeApplication();
   }, []);
 
@@ -150,28 +157,36 @@ export default function App() {
     void updateService.checkForUpdates({ silent: true });
   }, [isInitialized]);
 
+  const characterIdsKey = useMemo(
+    () => characters.map((c) => c.id).join(','),
+    [characters]
+  );
+
   // Initialize & periodically randomize virtual presence status per character (Zero AI API calls; never blocks chat)
   useEffect(() => {
     if (characters.length === 0) return;
+    const currentChars = characters;
 
     setPresenceMap((prev) => {
+      let changed = false;
       const next: Record<string, PresenceStatus> = { ...prev };
-      for (const c of characters) {
+      for (const c of currentChars) {
         if (!next[c.id]) {
           next[c.id] = c.id === GUIDE_RAVI_ID ? 'online' : pickRandomPresence();
+          changed = true;
         }
       }
-      return next;
+      return changed ? next : prev;
     });
 
     const interval = window.setInterval(() => {
       setPresenceMap((prev) => {
-        if (characters.length === 0) return prev;
+        if (currentChars.length === 0) return prev;
         const next: Record<string, PresenceStatus> = { ...prev };
         // Randomly update 1~2 characters per tick for natural ambient atmosphere
-        const updateCount = Math.min(2, characters.length);
+        const updateCount = Math.min(2, currentChars.length);
         for (let i = 0; i < updateCount; i++) {
-          const target = characters[Math.floor(Math.random() * characters.length)];
+          const target = currentChars[Math.floor(Math.random() * currentChars.length)];
           if (!target) continue;
           const randomState =
             PRESENCE_STATES[Math.floor(Math.random() * PRESENCE_STATES.length)];
@@ -182,7 +197,7 @@ export default function App() {
     }, 20000);
 
     return () => window.clearInterval(interval);
-  }, [characters]);
+  }, [characterIdsKey]);
 
   const initializeApplication = async () => {
     try {
@@ -690,16 +705,20 @@ export default function App() {
         />
       ) : (
         <>
-          <header className="h-14 px-4 sm:px-6 bg-slate-950/90 backdrop-blur-md border-b border-indigo-500/30 flex items-center justify-between gap-8 shrink-0 z-30">
+          <header className={`h-14 px-4 sm:px-6 bg-slate-950/90 backdrop-blur-md border-b border-indigo-500/30 flex items-center justify-between gap-8 shrink-0 z-30 ${
+            activeTab === 'characters' ? 'character-nav' : ''
+          }`}>
             <a
               href="#top"
               onClick={(e) => {
                 e.preventDefault();
                 setActiveTab('chat');
               }}
-              className="text-base sm:text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0"
+              className={`text-base sm:text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0 ${activeTab === 'characters' ? 'character-nav-brand' : ''}`}
             >
-              러비러비톡 Lovy Lovy Talk
+              {activeTab === 'characters' ? (
+                <><CharacterRabbit /><span>러비러비톡 Lovy Lovy Talk</span></>
+              ) : '러비러비톡 Lovy Lovy Talk'}
             </a>
 
             <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-slate-300">
@@ -722,7 +741,7 @@ export default function App() {
                 onClick={() => setActiveTab('characters')}
                 className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   activeTab === 'characters'
-                    ? 'text-pink-400 underline underline-offset-8 decoration-2'
+                    ? 'character-nav-current text-pink-400 underline underline-offset-8 decoration-2'
                     : 'hover:text-white'
                 }`}
               >
@@ -773,9 +792,13 @@ export default function App() {
                 appSettings={appSettings}
                 onSettingsUpdated={(updated) => setAppSettings(updated)}
                 onNavigateCharacters={() => setActiveTab('characters')}
+                onNavigateDeveloper={() => { setDeveloperAuthenticated(true); setActiveTab('developer'); }}
               />
             )}
 
+            {activeTab === 'developer' && developerAuthenticated && (
+              <DeveloperPage appSettings={appSettings} onDeactivate={() => { setDeveloperAuthenticated(false); setActiveTab('settings'); }} />
+            )}
             {activeTab === 'report' && <VerificationReportModal />}
           </main>
         </>

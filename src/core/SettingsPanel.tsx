@@ -1,325 +1,111 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AppSettings } from '../core/types';
 import { storageService } from '../storage/storageService';
 import { platformService } from '../platform/platformService';
 import { updateService, UpdateState } from '../platform/updateService';
-import { aiService } from '../ai/aiService';
-import { DeveloperModeNarratorGuide } from './DeveloperModeNarratorGuide';
+import { DeveloperAccess } from '../developer/DeveloperAccess';
+import { CharacterRabbit } from '../characters/characterSkin';
 import {
-  Settings,
-  Database,
-  CloudOff,
-  Download,
-  Cpu,
-  Smartphone,
-  ShieldCheck,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  UserCircle2,
-  ArrowRight,
-  RefreshCw,
+  Settings, Database, RefreshCw, Code2, Network, Palette, Bell, KeyRound,
+  UserRound, Info, ArrowLeft, CheckCircle2, Download, Cloud, Sparkles,
 } from 'lucide-react';
+import './settings.css';
 
 interface SettingsPanelProps {
   appSettings: AppSettings;
   onSettingsUpdated: (updated: AppSettings) => void;
   onNavigateCharacters?: () => void;
+  onNavigateDeveloper: () => void;
 }
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({
-  appSettings,
-  onSettingsUpdated,
-  onNavigateCharacters,
-}) => {
+const SKIN = '/settings-skin/';
+const CARDS = [
+  { id: 'basic', title: '기본 설정', icon: 'icon_basic.png', glyph: Settings, tint: 'pink', summary: '효과음과 커뮤니티 이미지' },
+  { id: 'storage', title: '저장 및 백업', icon: 'icon_storage.png', glyph: Database, tint: 'cyan', summary: 'JSON 데이터 내보내기' },
+  { id: 'update', title: '앱 업데이트', icon: 'icon_update.png', glyph: RefreshCw, tint: 'pink', summary: '설치형 앱 버전 확인' },
+  { id: 'developer', title: '개발자 모드', icon: 'icon_developer.png', glyph: Code2, tint: 'cyan', summary: '암호 인증 후 전용 페이지' },
+  { id: 'ai', title: 'AI 연동', icon: 'icon_ai.png', glyph: Network, tint: 'pink', summary: 'AI 연결 설정 안내' },
+  { id: 'theme', title: '테마 설정', icon: 'icon_theme.png', glyph: Palette, tint: 'pink', summary: '화면 테마' },
+  { id: 'notifications', title: '알림 설정', icon: 'icon_notification.png', glyph: Bell, tint: 'cyan', summary: '알림 환경' },
+  { id: 'api', title: 'API 설정', icon: 'icon_api.png', glyph: KeyRound, tint: 'pink', summary: 'API 설정 안내' },
+  { id: 'avatar', title: '나의 분신', icon: 'icon_avatar.png', glyph: UserRound, tint: 'cyan', summary: '캐릭터 관리에서 편집' },
+  { id: 'about', title: '앱 정보', icon: 'icon_info.png', glyph: Info, tint: 'pink', summary: '버전 및 플랫폼 정보' },
+] as const;
+type SectionId = (typeof CARDS)[number]['id'];
+
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ appSettings, onSettingsUpdated, onNavigateCharacters, onNavigateDeveloper }) => {
+  const [selected, setSelected] = useState<SectionId | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(appSettings.soundEnabled);
   const [aiImageGen, setAiImageGen] = useState(appSettings.aiImageGenerationEnabled);
   const [statusNote, setStatusNote] = useState<string | null>(null);
-
-  // Developer Mode Guide toggle
-  const [showDeveloperMode, setShowDeveloperMode] = useState(false);
+  const [developerGate, setDeveloperGate] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>(() => updateService.getState());
+  useEffect(() => updateService.subscribe(setUpdateState), []);
+  useEffect(() => { setSoundEnabled(appSettings.soundEnabled); setAiImageGen(appSettings.aiImageGenerationEnabled); }, [appSettings]);
 
-  const platformStatus = platformService.getPlatformStatus();
-  const aiStatus = aiService.getLayerStatus();
-
-  useEffect(() => {
-    return updateService.subscribe(setUpdateState);
-  }, []);
-
-  useEffect(() => {
-    setSoundEnabled(appSettings.soundEnabled);
-    setAiImageGen(appSettings.aiImageGenerationEnabled);
-  }, [appSettings]);
-
-  const handleToggleSetting = async (
-    key: 'soundEnabled' | 'aiImageGenerationEnabled',
-    val: boolean
-  ) => {
-    if (key === 'soundEnabled') setSoundEnabled(val);
-    if (key === 'aiImageGenerationEnabled') setAiImageGen(val);
-
+  const handleToggleSetting = async (key: 'soundEnabled' | 'aiImageGenerationEnabled', val: boolean) => {
+    if (key === 'soundEnabled') setSoundEnabled(val); else setAiImageGen(val);
     const saved = await storageService.saveAppSettings({ [key]: val });
     onSettingsUpdated(saved);
-    setStatusNote('환경설정이 IndexedDB "settings" 스토어에 즉시 저장되었습니다.');
+    setStatusNote('설정이 저장되었습니다.');
   };
-
-  const handleExportLocalSnapshot = async () => {
+  const handleExport = async () => {
     const json = await storageService.exportSnapshotJson();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `lovy_lovy_talk_snapshot_v${appSettings.schemaVersion}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setStatusNote('로컬 데이터베이스 스냅샷 JSON 파일을 내보냈습니다.');
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    const a = document.createElement('a'); a.href = url;
+    a.download = `lovy_lovy_talk_snapshot_v${appSettings.schemaVersion}.json`; a.click(); URL.revokeObjectURL(url);
+    setStatusNote('로컬 데이터 스냅샷 JSON을 내보냈습니다.');
   };
+  const openSection = (id: SectionId) => {
+    if (id === 'developer') { setDeveloperGate(true); return; }
+    setSelected(id);
+  };
+  const activeCard = CARDS.find(card => card.id === selected);
 
-  return (
-    <div className="flex flex-col h-full bg-slate-950/75 text-slate-100 overflow-y-auto p-4 sm:p-6 space-y-6">
-      {/* Header */}
-      <div className="border-b border-indigo-500/30 pb-4">
-        <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-          <Settings size={20} className="text-pink-400" />
-          <span>앱 환경설정 및 개발자 모드 안내</span>
-        </h2>
-        <p className="text-xs text-slate-400 mt-1">
-          기본 동작 설정, 로컬 데이터 백업 및 개발자 모드(사회자 프롬프트 소스코드 안내)를 관리합니다.
-        </p>
-      </div>
-
-      {statusNote && (
-        <div className="p-3.5 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-xs text-emerald-200 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 size={15} />
-            <span>{statusNote}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setStatusNote(null)}
-            className="text-xs text-slate-300 hover:text-white"
-          >
-            닫기
-          </button>
+  return <div className="lovy-settings">
+    <img className="lovy-settings-frame" src={`${SKIN}outer_frame.png`} alt="" aria-hidden="true" />
+    <div className="lovy-settings-content">
+      <header className="lovy-settings-heading">
+        <img src={`${SKIN}icon_basic.png`} alt="" aria-hidden="true" />
+        <div><h1>환경설정</h1><p>러비러비톡 환경을 관리합니다.</p></div>
+      </header>
+      {statusNote && <div className="lovy-settings-notice" role="status"><CheckCircle2 size={16}/><span>{statusNote}</span><button type="button" onClick={() => setStatusNote(null)}>닫기</button></div>}
+      {!selected ? <>
+        <div className="lovy-settings-grid" aria-label="환경설정 항목">
+          {CARDS.map(card => <button key={card.id} type="button" className={`lovy-settings-card ${card.tint}`} onClick={() => openSection(card.id)} aria-label={`${card.title}: ${card.summary}`}>
+            <img className="lovy-settings-card-frame" src={`${SKIN}card_${card.tint === 'pink' ? 'magenta' : 'cyan'}.png`} alt="" aria-hidden="true" />
+            <img className="lovy-settings-card-icon" src={`${SKIN}${card.icon}`} alt="" aria-hidden="true" />
+            <span className="lovy-settings-card-title">{card.title}</span>
+            <span className="lovy-settings-card-summary">{card.summary}</span>
+          </button>)}
         </div>
-      )}
-
-      {/* Relocation Notice: User Profile moved to Character Management ("나의 분신") */}
-      {onNavigateCharacters && (
-        <div className="p-4 rounded-2xl bg-slate-900/90 border border-indigo-500/30 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 text-xs">
-            <UserCircle2 size={18} className="text-pink-400 shrink-0" />
-            <div>
-              <div className="font-bold text-white">「나의 분신」 프로필 관리는 캐릭터 관리 페이지로 이동되었습니다</div>
-              <div className="text-[11px] text-slate-400 mt-0.5">
-                기존에 저장된 프로필 데이터는 그대로 유지되며 [캐릭터 관리] 상단에서 생성 및 수정할 수 있습니다.
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onNavigateCharacters}
-            className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white flex items-center gap-1.5 shrink-0"
-          >
-            <span>나의 분신 관리로 이동</span>
-            <ArrowRight size={13} />
-          </button>
-        </div>
-      )}
-
-      {/* Basic Settings Switches & Storage Backup */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="p-5 rounded-2xl bg-slate-900/90 border border-indigo-500/30 space-y-4">
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <Cpu size={16} className="text-indigo-400" />
-            <span>기본 동작 설정</span>
-          </h3>
-
-          <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-            <div>
-              <div className="text-xs font-bold text-white">UI 효과음 설정</div>
-              <div className="text-[11px] text-slate-400">알림 및 버튼 조작 사운드 활성화 여부</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleToggleSetting('soundEnabled', !soundEnabled)}
-              className={`min-h-[36px] px-4 py-1.5 rounded-xl text-xs font-bold transition-colors ${
-                soundEnabled ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              {soundEnabled ? 'ON' : 'OFF'}
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-            <div className="pr-3">
-              <div className="text-xs font-bold text-white">
-                커뮤니티 AI 이미지 생성 스위치
-              </div>
-              <div className="text-[11px] text-slate-400 mt-0.5">
-                환경설정에서 ON/OFF 상태를 저장합니다.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleToggleSetting('aiImageGenerationEnabled', !aiImageGen)}
-              className={`min-h-[36px] px-4 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 ${
-                aiImageGen ? 'bg-pink-600 text-white' : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              {aiImageGen ? 'ON (예약)' : 'OFF (기본)'}
-            </button>
-          </div>
-        </div>
-
-        {/* Storage & Backup Expansion Layer */}
-        <div className="p-5 rounded-2xl bg-slate-900/90 border border-indigo-500/30 space-y-4">
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <Database size={16} className="text-sky-400" />
-            <span>IndexedDB 저장 시스템 및 백업 확장 인터페이스</span>
-          </h3>
-
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-white">데이터베이스 이름</span>
-              <span className="font-mono text-indigo-300">
-                lovy_lovy_talk_db (스키마 v{appSettings.schemaVersion})
-              </span>
-            </div>
-            <div className="text-slate-400 leading-relaxed">
-              분리된 스토어: <code className="text-pink-300">characters</code>,{' '}
-              <code className="text-pink-300">messages</code>,{' '}
-              <code className="text-pink-300">stories</code>,{' '}
-              <code className="text-pink-300">community</code>,{' '}
-              <code className="text-pink-300">assets</code>,{' '}
-              <code className="text-pink-300">settings</code>,{' '}
-              <code className="text-pink-300">rooms</code>
-            </div>
-            <div className="flex items-center gap-1.5 text-emerald-300 pt-1">
-              <ShieldCheck size={14} />
-              <span>사용자 승인 없는 데이터 초기화 금지 및 트랜잭션 보호 적용됨</span>
-            </div>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
-            <div className="flex items-center gap-2 font-bold text-slate-200">
-              <CloudOff size={15} className="text-amber-400" />
-              <span>Google Drive 클라우드 백업 상태: 후속 단계 구현 예정 (미연결)</span>
-            </div>
-            <p className="text-slate-400 leading-relaxed">
-              저장 계층 인터페이스(`storageService`)만 분리되어 있으며, 실제 Google Drive 백업이 연결되기 전까지 허위 백업 완료 메시지를 표시하지 않습니다.
-            </p>
-            <button
-              type="button"
-              onClick={handleExportLocalSnapshot}
-              className="mt-2 min-h-[38px] px-3.5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 border border-indigo-500/40 text-xs font-medium text-indigo-200 flex items-center gap-1.5"
-            >
-              <Download size={13} />
-              <span>현재 로컬 DB 전체 스냅샷 JSON 내보내기</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Developer Mode Guide Screen */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-xs font-bold text-indigo-200">개발자 모드 가이드</div>
-          <button
-            type="button"
-            onClick={() => setShowDeveloperMode(!showDeveloperMode)}
-            className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-indigo-500/30 text-xs font-semibold text-indigo-200 flex items-center gap-1.5 shrink-0"
-          >
-            <span>{showDeveloperMode ? '개발자 가이드 접기' : '사회자 프롬프트 경로 및 역할 상세 가이드 열기'}</span>
-            {showDeveloperMode ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-        </div>
-
-        {showDeveloperMode && <DeveloperModeNarratorGuide />}
-      </div>
-
-      {/* Platform & AI Layer Status */}
-      <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3 text-xs">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 font-bold text-white text-sm">
-            <Smartphone size={16} className="text-pink-400" />
-            <span>멀티플랫폼 (Web · Windows Electron · Android Capacitor) 및 앱 업데이트</span>
-          </div>
-          <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-indigo-500/30 font-mono text-[11px] text-indigo-300">
-            v{updateService.getInstalledVersion()} · {platformService.getPlatformLabel()}
-          </span>
-        </div>
-
-        {/* Manual App Update Check Bar */}
-        <div className="p-3.5 rounded-xl bg-slate-950 border border-indigo-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1">
-            <div className="font-semibold text-white">설치형 앱 정식 버전 업데이트</div>
-            {updateState.supported ? (
-              <div className="text-slate-300 leading-relaxed">
-                {updateState.errorMessage ? (
-                  <span className="text-amber-300">{updateState.errorMessage}</span>
-                ) : updateState.statusMessage ? (
-                  <span>{updateState.statusMessage}</span>
-                ) : (
-                  <span>
-                    현재 버전 v{updateService.getInstalledVersion()} · 최신 정식 릴리스 여부를 수동으로 확인할 수 있습니다.
-                  </span>
-                )}
-              </div>
-            ) : (
-              <div className="text-slate-400 leading-relaxed">
-                현재 웹 버전으로 실행 중입니다. 설치형 앱(Android APK / Windows EXE) 전용 자동 업데이트는 웹 환경에서 실행되지 않습니다.
-              </div>
-            )}
-          </div>
-
-          {updateState.supported && (
-            <div className="flex items-center gap-2 shrink-0">
-              {updateState.info && !updateState.modalOpen && (
-                <button
-                  type="button"
-                  onClick={() => updateService.reopenModal()}
-                  className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-bold text-white cursor-pointer"
-                >
-                  v{updateState.info.latestVersion} 업데이트 열기
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={updateState.phase === 'checking' || updateState.phase === 'downloading'}
-                onClick={() => void updateService.checkForUpdates({ silent: false })}
-                className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center gap-1.5 cursor-pointer"
-              >
-                <RefreshCw
-                  size={13}
-                  className={updateState.phase === 'checking' ? 'animate-spin' : ''}
-                />
-                <span>
-                  {updateState.phase === 'checking'
-                    ? '확인 중...'
-                    : updateState.phase === 'error'
-                    ? '다시 확인'
-                    : '업데이트 확인'}
-                </span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
-            <div className="font-semibold text-indigo-300">플랫폼 런타임 및 패키징 상태</div>
-            <p className="text-slate-300">{platformStatus.nativeBuildStatusNote}</p>
-            <p className="text-slate-400 mt-1">{platformStatus.updatePolicyNote}</p>
-          </div>
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
-            <div className="font-semibold text-pink-300">AI 통신 및 사회자 시스템 연동 상태</div>
-            <p className="text-slate-300">현재 단계: {aiStatus.phase}</p>
-            <p className="text-slate-400 mt-1">{aiStatus.note}</p>
-          </div>
-        </div>
-      </div>
+        <img className="lovy-settings-rabbit" src={`${SKIN}rabbit_headset.png`} alt="헤드셋을 착용한 토끼" />
+        <img className="lovy-settings-heart" src={`${SKIN}heart_bubble.png`} alt="픽셀 하트 말풍선 장식" />
+        <img className="lovy-settings-rabbit-ears" src={`${SKIN}rabbit_ears.png`} alt="토끼 귀 장식" />
+        <img className="lovy-settings-circuit" src={`${SKIN}divider_lower.png`} alt="네온 구분선 장식" />
+      </> : <section className="lovy-settings-detail">
+        <button type="button" className="lovy-settings-back" onClick={() => setSelected(null)}><ArrowLeft size={16}/>환경설정 목록</button>
+        <div className="lovy-settings-detail-title"><img src={`${SKIN}${activeCard?.icon}`} alt=""/><div><h2>{activeCard?.title}</h2><p>{activeCard?.summary}</p></div></div>
+        {selected === 'basic' && <div className="lovy-settings-panel">
+          <SettingToggle title="UI 효과음" help="알림 및 버튼 조작 사운드" checked={soundEnabled} onChange={value => void handleToggleSetting('soundEnabled', value)} />
+          <SettingToggle title="커뮤니티 AI 이미지 생성" help="커뮤니티 이미지 생성 설정" checked={aiImageGen} onChange={value => void handleToggleSetting('aiImageGenerationEnabled', value)} />
+        </div>}
+        {selected === 'storage' && <div className="lovy-settings-panel"><div className="lovy-settings-row"><div><b><Cloud size={17}/> Google Drive 백업</b><p>현재 버전에서는 연결되지 않았습니다.</p></div><span className="lovy-settings-unavailable">미연결</span></div><div className="lovy-settings-row"><div><b><Database size={17}/> JSON 데이터 내보내기</b><p>현재 로컬 데이터베이스 스냅샷을 파일로 저장합니다.</p></div><button type="button" className="lovy-settings-action" onClick={() => void handleExport()}><Download size={15}/>내보내기</button></div></div>}
+        {selected === 'update' && <div className="lovy-settings-panel"><div className="lovy-settings-row"><div><b>앱 버전</b><p>v{updateService.getInstalledVersion()} · {platformService.getPlatformLabel()}</p>{updateState.errorMessage && <p className="lovy-settings-error">{updateState.errorMessage}</p>}{updateState.statusMessage && <p>{updateState.statusMessage}</p>}</div>{updateState.supported && <div className="lovy-settings-actions">{updateState.info && !updateState.modalOpen && <button type="button" onClick={() => updateService.reopenModal()}>v{updateState.info.latestVersion} 업데이트 열기</button>}<button type="button" className="lovy-settings-action" disabled={updateState.phase === 'checking' || updateState.phase === 'downloading'} onClick={() => void updateService.checkForUpdates({ silent: false })}><RefreshCw size={15}/>업데이트 확인</button></div>}</div>{!updateState.supported && <p className="lovy-settings-muted">웹 버전에서는 설치형 앱 자동 업데이트를 사용할 수 없습니다.</p>}</div>}
+        {selected === 'ai' && <Placeholder icon={<Sparkles size={20}/>} text="AI 연결은 API 설정에서 관리합니다. 기존 AI 동작 방식은 변경되지 않았습니다."/>}
+        {selected === 'api' && <Placeholder icon={<KeyRound size={20}/>} text="현재 제공된 프로젝트에는 이 화면에서 조정하는 API 설정이 없습니다."/>}
+        {selected === 'theme' && <Placeholder icon={<Palette size={20}/>} text="기존 채팅 화면 테마와 PNG 꾸미기는 채팅 화면의 화면 설정에서 관리합니다."/>}
+        {selected === 'notifications' && <Placeholder icon={<Bell size={20}/>} text="현재 설정 가능한 알림 기능이 없습니다."/>}
+        {selected === 'avatar' && <div className="lovy-settings-panel"><div className="lovy-settings-row"><div><b>나의 분신 프로필</b><p>저장된 프로필은 유지되며 캐릭터 관리에서 편집할 수 있습니다.</p></div>{onNavigateCharacters && <button type="button" className="lovy-settings-action" onClick={onNavigateCharacters}>캐릭터 관리로 이동</button>}</div></div>}
+        {selected === 'about' && <div className="lovy-settings-panel"><div className="lovy-settings-row"><div><b>러비러비톡 Lovy Lovy Talk</b><p>버전 v{updateService.getInstalledVersion()}</p><p>{platformService.getPlatformStatus().nativeBuildStatusNote}</p></div><Info size={22}/></div></div>}
+      </section>}
+      <div className="lovy-settings-rabbit-brand"><CharacterRabbit/><span>Lovy Lovy Talk</span></div>
     </div>
-  );
+    {developerGate && <div className="lovy-settings-gate"><DeveloperAccess onAuthenticated={() => { setDeveloperGate(false); onNavigateDeveloper(); }} onCancel={() => setDeveloperGate(false)} /></div>}
+  </div>;
 };
+
+function SettingToggle({ title, help, checked, onChange }: { title: string; help: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return <div className="lovy-settings-row"><div><b>{title}</b><p>{help}</p></div><button type="button" className={`lovy-settings-switch ${checked ? 'on' : ''}`} aria-pressed={checked} aria-label={`${title} ${checked ? '켜짐' : '꺼짐'}`} onClick={() => onChange(!checked)}><img src={`${SKIN}switch_${checked ? 'on' : 'off'}.png`} alt=""/><span>{checked ? 'ON' : 'OFF'}</span></button></div>;
+}
+function Placeholder({ icon, text }: { icon: React.ReactNode; text: string }) { return <div className="lovy-settings-panel lovy-settings-placeholder"><span>{icon}</span><p>{text}</p></div>; }
