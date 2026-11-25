@@ -706,7 +706,7 @@ export default function App() {
       ) : (
         <>
           <header className={`h-14 px-4 sm:px-6 bg-slate-950/90 backdrop-blur-md border-b border-indigo-500/30 flex items-center justify-between gap-8 shrink-0 z-30 ${
-            activeTab === 'characters' ? 'character-nav' : ''
+            activeTab === 'characters' ? 'character-nav' : activeTab === 'settings' ? 'settings-top-nav' : ''
           }`}>
             <a
               href="#top"
@@ -714,9 +714,9 @@ export default function App() {
                 e.preventDefault();
                 setActiveTab('chat');
               }}
-              className={`text-base sm:text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0 ${activeTab === 'characters' ? 'character-nav-brand' : ''}`}
+              className={`text-base sm:text-lg font-extrabold tracking-tight text-white whitespace-nowrap shrink-0 ${activeTab === 'characters' ? 'character-nav-brand' : activeTab === 'settings' ? 'settings-nav-brand' : ''}`}
             >
-              {activeTab === 'characters' ? (
+              {activeTab === 'characters' || activeTab === 'settings' ? (
                 <><CharacterRabbit /><span>러비러비톡 Lovy Lovy Talk</span></>
               ) : '러비러비톡 Lovy Lovy Talk'}
             </a>
@@ -775,7 +775,7 @@ export default function App() {
             </div>
           </header>
 
-          <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <main className={`flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'settings' ? 'settings-main-area' : ''}`}>
             {activeTab === 'characters' && (
               <CharacterManager
                 userProfile={userProfile}
