@@ -21,6 +21,9 @@ import { CommunityFeed } from './community/CommunityFeed';
 import { CharacterManager } from './characters/CharacterManager';
 import { SettingsPanel } from './core/SettingsPanel';
 import { VerificationReportModal } from './core/VerificationReportModal';
+import { UpdateModal } from './components/UpdateModal';
+import { platformService } from './platform/platformService';
+import { updateService, UpdateState } from './platform/updateService';
 import {
   MessageSquare,
   MessageCircle,
@@ -129,9 +132,23 @@ export default function App() {
   const [newRoomTitle, setNewRoomTitle] = useState<string>('');
   const [newRoomMode, setNewRoomMode] = useState<'daily' | 'story'>('daily');
 
+  const [updateState, setUpdateState] = useState<UpdateState>(() => updateService.getState());
+
   useEffect(() => {
     initializeApplication();
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = updateService.subscribe(setUpdateState);
+    return unsubscribe;
+  }, []);
+
+  // Run silent startup update check ONLY on installed Android/Windows native apps (never on Web)
+  useEffect(() => {
+    if (!isInitialized) return;
+    if (!platformService.isNativeInstallableApp()) return;
+    void updateService.checkForUpdates({ silent: true });
+  }, [isInitialized]);
 
   // Initialize & periodically randomize virtual presence status per character (Zero AI API calls; never blocks chat)
   useEffect(() => {
@@ -997,6 +1014,8 @@ export default function App() {
           </form>
         </div>
       )}
+      {/* Native App Auto-Update Modal (Android / Windows only; disabled on Web) */}
+      <UpdateModal state={updateState} />
     </div>
   );
 }

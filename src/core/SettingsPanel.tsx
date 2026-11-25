@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AppSettings } from '../core/types';
 import { storageService } from '../storage/storageService';
 import { platformService } from '../platform/platformService';
+import { updateService, UpdateState } from '../platform/updateService';
 import { aiService } from '../ai/aiService';
 import { DeveloperModeNarratorGuide } from './DeveloperModeNarratorGuide';
 import {
@@ -17,6 +18,7 @@ import {
   ChevronUp,
   UserCircle2,
   ArrowRight,
+  RefreshCw,
 } from 'lucide-react';
 
 interface SettingsPanelProps {
@@ -36,9 +38,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   // Developer Mode Guide toggle
   const [showDeveloperMode, setShowDeveloperMode] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>(() => updateService.getState());
 
   const platformStatus = platformService.getPlatformStatus();
   const aiStatus = aiService.getLayerStatus();
+
+  useEffect(() => {
+    return updateService.subscribe(setUpdateState);
+  }, []);
 
   useEffect(() => {
     setSoundEnabled(appSettings.soundEnabled);
@@ -234,10 +241,72 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
       {/* Platform & AI Layer Status */}
       <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3 text-xs">
-        <div className="flex items-center gap-2 font-bold text-white text-sm">
-          <Smartphone size={16} className="text-pink-400" />
-          <span>멀티플랫폼 (Web · Windows Electron · Android Capacitor) 및 AI 계층 상태</span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-bold text-white text-sm">
+            <Smartphone size={16} className="text-pink-400" />
+            <span>멀티플랫폼 (Web · Windows Electron · Android Capacitor) 및 앱 업데이트</span>
+          </div>
+          <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-indigo-500/30 font-mono text-[11px] text-indigo-300">
+            v{updateService.getInstalledVersion()} · {platformService.getPlatformLabel()}
+          </span>
         </div>
+
+        {/* Manual App Update Check Bar */}
+        <div className="p-3.5 rounded-xl bg-slate-950 border border-indigo-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="font-semibold text-white">설치형 앱 정식 버전 업데이트</div>
+            {updateState.supported ? (
+              <div className="text-slate-300 leading-relaxed">
+                {updateState.errorMessage ? (
+                  <span className="text-amber-300">{updateState.errorMessage}</span>
+                ) : updateState.statusMessage ? (
+                  <span>{updateState.statusMessage}</span>
+                ) : (
+                  <span>
+                    현재 버전 v{updateService.getInstalledVersion()} · 최신 정식 릴리스 여부를 수동으로 확인할 수 있습니다.
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-slate-400 leading-relaxed">
+                현재 웹 버전으로 실행 중입니다. 설치형 앱(Android APK / Windows EXE) 전용 자동 업데이트는 웹 환경에서 실행되지 않습니다.
+              </div>
+            )}
+          </div>
+
+          {updateState.supported && (
+            <div className="flex items-center gap-2 shrink-0">
+              {updateState.info && !updateState.modalOpen && (
+                <button
+                  type="button"
+                  onClick={() => updateService.reopenModal()}
+                  className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-xs font-bold text-white cursor-pointer"
+                >
+                  v{updateState.info.latestVersion} 업데이트 열기
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={updateState.phase === 'checking' || updateState.phase === 'downloading'}
+                onClick={() => void updateService.checkForUpdates({ silent: false })}
+                className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw
+                  size={13}
+                  className={updateState.phase === 'checking' ? 'animate-spin' : ''}
+                />
+                <span>
+                  {updateState.phase === 'checking'
+                    ? '확인 중...'
+                    : updateState.phase === 'error'
+                    ? '다시 확인'
+                    : '업데이트 확인'}
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
             <div className="font-semibold text-indigo-300">플랫폼 런타임 및 패키징 상태</div>

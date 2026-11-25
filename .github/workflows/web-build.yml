@@ -1,4 +1,4 @@
-name: Web Build Verification (Phase 1)
+name: Web Build & Lockfile Verification
 
 on:
   push:
@@ -9,23 +9,32 @@ on:
 
 jobs:
   web-build:
-    name: Verify TypeScript & Vite Web Production Build
+    name: Verify Lockfile, Version Sync, TypeScript & Vite Web Build
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '22'
+          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
+      - name: Verify package.json and package-lock.json consistency (npm ci)
+        run: npm ci
+
+      - name: Verify unified version consistency across Web, Android, and Windows
+        run: npm run version:verify
 
       - name: Run TypeScript type check
         run: npm run lint
 
       - name: Run Vite production web build
+        env:
+          VITE_GITHUB_REPO: ${{ github.repository }}
         run: npm run build
+
+      - name: Compile Electron TypeScript sources (sanity check)
+        run: npm run electron:compile

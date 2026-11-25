@@ -1,0 +1,105 @@
+apply plugin: 'com.android.application'
+
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+def resolveSigningProp = { String envKey, String propKey ->
+    def envVal = System.getenv(envKey)
+    if (envVal != null && !envVal.trim().isEmpty()) {
+        return envVal.trim()
+    }
+    def propVal = keystoreProperties.getProperty(propKey)
+    return propVal != null ? propVal.trim() : ""
+}
+
+def releaseStorePath = resolveSigningProp("ANDROID_KEYSTORE_PATH", "storeFile")
+def releaseStorePassword = resolveSigningProp("ANDROID_KEYSTORE_PASSWORD", "storePassword")
+def releaseKeyAlias = resolveSigningProp("ANDROID_KEY_ALIAS", "keyAlias")
+def releaseKeyPassword = resolveSigningProp("ANDROID_KEY_PASSWORD", "keyPassword") ?: releaseStorePassword
+
+android {
+    namespace = "com.lovelytalk.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.lovelytalk.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 10000
+        versionName "1.0.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (releaseStorePath && file(releaseStorePath).exists()) {
+                storeFile file(releaseStorePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+                v1SigningEnabled true
+                v2SigningEnabled true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def buildingRelease = taskGraph.allTasks.any { t ->
+        t.name.toLowerCase().contains("release") &&
+            (t.name.toLowerCase().contains("assemble") || t.name.toLowerCase().contains("bundle") || t.name.toLowerCase().contains("package"))
+    }
+    if (buildingRelease) {
+        if (!releaseStorePath || !file(releaseStorePath).exists() || !releaseStorePassword || !releaseKeyAlias) {
+            throw new GradleException(
+                "Permanent release signing keystore is missing or incomplete! " +
+                "Release builds MUST be signed with the permanent keystore (set ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD). " +
+                "Refusing to build an unsigned or debug-signed release APK."
+            )
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
