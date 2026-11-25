@@ -7,6 +7,7 @@ import {
   CommunityPost,
   CommunityComment,
   CommunityItem,
+  CommunityLikeRecord,
   CustomizationSettings,
   AppSettings,
   UserProfile,
@@ -55,7 +56,7 @@ export interface LovyDB extends DBSchema {
   };
   settings: {
     key: string;
-    value: CustomizationSettings | AppSettings | UserProfile;
+    value: CustomizationSettings | AppSettings | UserProfile | CommunityLikeRecord;
   };
 }
 

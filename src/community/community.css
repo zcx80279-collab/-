@@ -42,17 +42,16 @@
 
 .community-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--frame-center) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) calc(var(--frame-center) + clamp(22px, 5vw, 80px)) minmax(0, 1fr);
   align-items: center;
   flex: none;
-  height: max(51px, calc(var(--frame-top) * .8));
-  padding-inline: max(15px, calc(var(--frame-unit) * .6));
+  padding: calc(var(--frame-top) * .88 + 2px) max(14px, calc(var(--frame-unit) * .6)) 9px;
 }
 
 .community-toolbar > div {
   display: flex;
   justify-content: flex-end;
-  gap: clamp(4px, 2vw, 30px);
+  gap: clamp(5px, 1.7vw, 26px);
 }
 
 .community-toolbar > div:last-child {
@@ -63,14 +62,9 @@
 .community-toolbar button {
   display: grid;
   place-items: center;
-  width: clamp(37px, 5vw, 56px);
-  height: clamp(40px, 5vw, 56px);
-  border-radius: 8px;
-}
-
-.community-toolbar button:hover,
-.community-toolbar button[aria-expanded="true"] {
-  background-color: #d4a6ff24;
+  width: clamp(36px, 4.5vw, 58px);
+  height: clamp(42px, 4.2vw, 54px);
+  background: transparent;
 }
 
 .community-shell button {
@@ -97,8 +91,8 @@
 }
 
 .community-toolbar .community-icon {
-  width: clamp(24px, 3.15vw, 48px);
-  height: clamp(24px, 3.15vw, 48px);
+  width: clamp(27px, 3.45vw, 51px);
+  height: clamp(27px, 3.45vw, 51px);
 }
 
 .community-content {
@@ -123,6 +117,21 @@
   z-index: -1;
   border: 0 solid transparent;
   border-image: var(--community-panel-image) 32 fill / 18px stretch;
+  pointer-events: none;
+  content: '';
+}
+
+.community-panel[data-neon-overlay]::before {
+  border-image-slice: var(--community-neon-slice);
+  border-image-width: var(--community-neon-width);
+}
+
+.community-panel[data-neon-overlay]::after {
+  position: absolute;
+  inset: 2px;
+  z-index: -2;
+  border-radius: calc(var(--community-neon-width) * .55);
+  background-color: var(--community-panel-base);
   pointer-events: none;
   content: '';
 }
@@ -313,9 +322,15 @@
 }
 
 .community-popular-list {
+  display: flex;
   flex: 1;
-  overflow-y: auto;
   padding: 8px;
+}
+
+.community-popular-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .community-popular-list li button {
@@ -343,6 +358,12 @@
 }
 
 .community-today {
+  display: flex;
+  flex-direction: column;
+}
+
+.community-today-scroll {
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -363,8 +384,7 @@
   flex: 1;
 }
 
-.community-tools :is(input, select),
-.community-comment-form :is(input, select) {
+.community-tools :is(input, select) {
   min-width: 0;
   max-width: 100%;
   padding: 7px 9px;
@@ -373,9 +393,7 @@
   background: #110c28;
 }
 
-.community-tools button,
-.community-back,
-.community-comment-form button {
+.community-tools button {
   min-height: 36px;
   padding: 4px 8px;
   color: #e6c8ff;
@@ -386,78 +404,6 @@
   overflow: auto;
 }
 
-.community-detail {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 5px;
-  min-height: 0;
-}
-
-.community-back {
-  align-self: start;
-}
-
-.community-detail-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  flex: 1;
-  min-height: 0;
-  gap: 12px;
-}
-
-.community-detail-post,
-.community-detail-comments {
-  padding: 17px;
-}
-
-.community-detail-post {
-  overflow-y: auto;
-}
-
-.community-detail-post h1 {
-  font-size: clamp(1.1rem, 2.4vw, 1.6rem);
-  font-weight: 700;
-}
-
-.community-detail-comments {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.community-comment-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  padding: 3px;
-}
-
-.community-comment {
-  padding: 10px 0;
-  overflow-wrap: anywhere;
-}
-
-.community-comment p {
-  margin: 5px 0 0 47px;
-}
-
-.community-comment-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: .82rem;
-}
-
-.community-comment-form select {
-  flex: 0 1 140px;
-}
-
-.community-comment-form input {
-  flex: 1 1 140px;
-}
-
 .community-drawer-backdrop {
   position: absolute;
   inset: 0;
@@ -466,26 +412,68 @@
 }
 
 .community-drawer {
-  width: min(78%, 290px);
-  height: 100%;
-  padding: 12px;
+  position: absolute;
+  inset: clamp(10px, 3vh, 30px) auto auto clamp(8px, 2vw, 28px);
+  width: min(83%, 298px);
+  max-height: calc(100% - clamp(20px, 6vh, 60px));
+  overflow: auto;
   animation: community-slide-in .2s ease-out;
 }
 
-.community-drawer .community-panel {
-  height: 100%;
-  padding: 26px;
+.community-drawer-panel {
+  display: grid;
+  gap: 8px;
+  padding: 23px 23px 24px;
+}
+
+.community-drawer-panel::before {
+  border-image-slice: 64 fill;
+  border-image-width: 33px;
+}
+
+.community-drawer-emblem {
+  display: grid;
+  place-items: center;
+  padding: 2px 0 6px;
+}
+
+.community-drawer-emblem .community-icon {
+  width: 28px;
+  height: 28px;
+  filter: drop-shadow(0 0 6px #b671f6);
 }
 
 .community-drawer button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 13px;
   width: 100%;
-  min-height: 48px;
+  min-height: 43px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #f4ecff;
+  font-size: .92rem;
+  font-weight: 600;
   text-align: start;
 }
 
+.community-drawer button .community-icon {
+  width: 23px;
+  height: 23px;
+}
+
 .community-drawer button:hover {
-  color: #efb5ff;
+  color: #d7f6ff;
+  background: #49337665;
+}
+
+.community-drawer button[aria-current="page"] {
+  border-color: #9f83ed;
+  color: #fff;
+  background: linear-gradient(105deg, #59318197, #24335f88);
+  box-shadow: 0 0 11px #9f68ed68, inset 0 0 10px #6889ed48;
+  text-shadow: 0 0 8px #d8a5f9;
 }
 
 @keyframes community-slide-in {
@@ -502,14 +490,11 @@
     overflow-y: auto;
   }
 
-  .community-card-grid,
-  .community-detail-columns {
+  .community-card-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .community-feed-scroll,
-  .community-detail-post,
-  .community-comment-list {
+  .community-feed-scroll {
     overflow: visible;
   }
 
@@ -520,18 +505,5 @@
   .community-side-layout {
     height: auto;
     grid-template-rows: auto auto;
-  }
-
-  .community-detail {
-    overflow-y: auto;
-  }
-
-  .community-detail-columns {
-    flex: none;
-  }
-
-  .community-detail-post,
-  .community-detail-comments {
-    padding: 12px;
   }
 }

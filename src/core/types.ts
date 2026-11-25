@@ -157,6 +157,10 @@ export interface CommunityComment {
   isExample: boolean;
 }
 
+export interface CommunityLikeRecord {
+  id: `community_like:${string}`;
+}
+
 export interface CommunityItem {
   id: string;
   recordType: 'post' | 'comment';

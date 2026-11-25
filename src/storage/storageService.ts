@@ -560,15 +560,32 @@ export const storageService = {
     return post;
   },
 
-  async addCommunityLike(postId: string): Promise<void> {
+  async getCommunityLike(postId: string): Promise<boolean> {
     const db = await getDb();
-    const tx = db.transaction('community', 'readwrite');
-    const item = await tx.store.get(postId);
-    if (item?.recordType === 'post' && item.post) {
-      item.post.likes = (item.post.likes ?? 0) + 1;
-      await tx.store.put(item);
+    return Boolean(await db.get('settings', `community_like:${postId}`));
+  },
+
+  async setCommunityLike(postId: string, liked: boolean): Promise<{ liked: boolean; likes: number } | null> {
+    const db = await getDb();
+    const tx = db.transaction(['community', 'settings'], 'readwrite');
+    const posts = tx.objectStore('community');
+    const settings = tx.objectStore('settings');
+    const item = await posts.get(postId);
+    if (item?.recordType !== 'post' || !item.post) {
+      await tx.done;
+      return null;
+    }
+
+    const id = `community_like:${postId}` as const;
+    const alreadyLiked = Boolean(await settings.get(id));
+    if (liked !== alreadyLiked) {
+      item.post.likes = Math.max(0, (item.post.likes ?? 0) + (liked ? 1 : -1));
+      await posts.put(item);
+      if (liked) await settings.put({ id });
+      else await settings.delete(id);
     }
     await tx.done;
+    return { liked, likes: item.post.likes ?? 0 };
   },
 
   async addCommunityComment(commentData: Omit<CommunityComment, 'id' | 'createdAt'>): Promise<CommunityComment> {

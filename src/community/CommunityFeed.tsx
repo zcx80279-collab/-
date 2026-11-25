@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   CommunityPost,
   CommunityComment,
@@ -10,6 +10,7 @@ import { storageService } from '../storage/storageService';
 import { COMMUNITY_RANDOM_TOPICS } from '../ai/aiService';
 import { DEFAULT_AVATARS } from '../core/defaultAssets';
 import { Image as ImageIcon, Upload } from 'lucide-react';
+import { CommunityPostDetail } from './CommunityPostDetail';
 import { CommunitySidebar } from './CommunitySidebar';
 import { CommunitySkinProvider, SkinDivider, SkinFrame, SkinIcon, SkinPanel } from './CommunitySkin';
 import type { CommunitySkinOverrides } from './CommunitySkin';
@@ -17,7 +18,10 @@ import { officialTag, postTags, searchablePostText, tagLabel } from './community
 import './community.css';
 
 const navigation = [
-  ['chat', '채팅방'], ['community', '커뮤니티'], ['characters', '캐릭터 관리'], ['settings', '환경설정'],
+  ['chat', '채팅방', 'comment'],
+  ['community', '커뮤니티', 'popularIcon'],
+  ['characters', '캐릭터 관리', 'navigationCharacters'],
+  ['settings', '환경설정', 'filter'],
 ] as const;
 type CommunityDestination = (typeof navigation)[number][0];
 
@@ -47,7 +51,6 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const [tagFilter, setTagFilter] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [openTool, setOpenTool] = useState<'search' | 'filter' | null>(null);
-  const [liking, setLiking] = useState(false);
 
   // New Post Form (For user data verification vs example data)
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -58,11 +61,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const [selectedImageAssetId, setSelectedImageAssetId] = useState<string>('none');
   const [communityAssets, setCommunityAssets] = useState<Asset[]>([]);
 
-  // New Comment Form
-  const [commentAuthorId, setCommentAuthorId] = useState<string>(characters[0]?.id || 'char-luna');
-  const [commentText, setCommentText] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const scrollPosition = useRef({ main: 0, feed: 0 });
@@ -126,22 +127,6 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     setStatusMessage('사용자 커뮤니티 게시글이 "community" 스토어에 저장되었습니다 (예시 데이터와 분리됨).');
   };
 
-  const handleAddComment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedPostId || !commentText.trim()) return;
-    const char = characters.find((c) => c.id === commentAuthorId) || characters[0];
-    await storageService.addCommunityComment({
-      postId: selectedPostId,
-      authorId: char ? char.id : 'user-test',
-      authorName: char ? char.name : '사용자 캐릭터',
-      authorAvatarAssetId: char ? char.avatarAssetId : 'guide-ravi-avatar',
-      content: commentText.trim(),
-      isExample: false,
-    });
-    setCommentText('');
-    await loadCommunityData();
-  };
-
   const handleDeleteExamplesOnly = async () => {
     const count = await storageService.deleteExampleCommunityDataOnly();
     if (selectedPostId) {
@@ -175,6 +160,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   });
 
   const selectedPost = posts.find((post) => post.id === selectedPostId);
+  const detailOpen = Boolean(selectedPost) && !showCreateForm;
   const selectedComments = selectedPost ? commentsByPost[selectedPost.id] ?? [] : [];
   const popular = [...posts].sort((a, b) => b.likes - a.likes || b.createdAt - a.createdAt).slice(0, 5);
   const today = new Date().toDateString();
@@ -196,20 +182,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       main: mainRef.current?.scrollTop ?? 0,
       feed: feedRef.current?.scrollTop ?? 0,
     };
-    setCommentText('');
     setSelectedPostId(id);
-  }
-
-  async function likePost(id: string) {
-    setLiking(true);
-    try {
-      await storageService.addCommunityLike(id);
-      await loadCommunityData();
-    } catch {
-      setStatusMessage('좋아요를 저장할 수 없습니다.');
-    } finally {
-      setLiking(false);
-    }
   }
 
   const author = (name: string, avatar: string, createdAt: number) => (
@@ -236,18 +209,20 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     );
   };
 
-  const focusBack = useCallback((button: HTMLButtonElement | null) => {
-    button?.focus({ preventScroll: true });
-  }, []);
+  const closeMenu = () => {
+    setMenuOpen(false);
+    menuTriggerRef.current?.focus({ preventScroll: true });
+  };
+
   const toggleTool = (tool: 'search' | 'filter') => setOpenTool(openTool === tool ? null : tool);
 
   return (
     <CommunitySkinProvider overrides={skinOverrides}>
-      <section className="community-shell" aria-label="커뮤니티">
-        <SkinFrame />
-        <header className="community-toolbar">
+      <section className={`community-shell ${detailOpen ? 'community-detail-shell' : ''}`} aria-label="커뮤니티">
+        <SkinFrame detail={detailOpen} />
+        {!detailOpen && <header className="community-toolbar">
           <div>
-            <button type="button" aria-label="이동 메뉴" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><SkinIcon id="menu" /></button>
+            <button type="button" aria-label="이동 메뉴" ref={menuTriggerRef} aria-expanded={menuOpen} aria-controls={menuOpen ? 'community-navigation' : undefined} onClick={() => setMenuOpen(true)}><SkinIcon id="menu" /></button>
             <button type="button" aria-label="게시글 작성" aria-expanded={showCreateForm} onClick={() => {
               setOpenTool(null);
               setShowCreateForm(!showCreateForm);
@@ -257,9 +232,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             <button type="button" aria-label="검색" aria-expanded={openTool === 'search'} onClick={() => toggleTool('search')}><SkinIcon id="search" /></button>
             <button type="button" aria-label="분류" aria-expanded={openTool === 'filter'} onClick={() => toggleTool('filter')}><SkinIcon id="filter" /></button>
           </div>
-        </header>
+        </header>}
         <div className="community-content">
-          {openTool && (
+          {!detailOpen && openTool && (
             <div className="community-tools">
               {openTool === 'search' ? (
                 <input type="search" aria-label="게시글 및 공식 해시태그 검색" placeholder="게시글 및 공식 해시태그 검색"
@@ -286,7 +261,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
               <button type="button" onClick={() => setOpenTool(null)}>닫기</button>
             </div>
           )}
-          {statusMessage && <div className="community-tools" role="status">
+          {!detailOpen && statusMessage && <div className="community-tools" role="status">
             <span>{statusMessage}</span><button type="button" onClick={() => setStatusMessage(null)}>닫기</button>
           </div>}
           {showCreateForm && (
@@ -455,54 +430,46 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             </SkinPanel>
             <CommunitySidebar popular={popular} tags={todaysTags} onPost={showPost} onTag={chooseTag} />
           </div>
-          {selectedPost && !showCreateForm && (
-            <section className="community-detail" aria-label="게시글 상세">
-              <button type="button" className="community-back" ref={focusBack} onClick={() => setSelectedPostId(null)}>← 게시글 목록으로 돌아가기</button>
-              <div className="community-detail-columns">
-                <SkinPanel id="post" className="community-detail-post">
-                  <article>
-                    {attachment(selectedPost)}
-                    {author(selectedPost.authorName, selectedPost.authorAvatarAssetId, selectedPost.createdAt)}
-                    <h1>{selectedPost.title}</h1>
-                    <p>{selectedPost.content}</p>
-                    {tagsOf(selectedPost)}
-                    <SkinDivider />
-                    <button className="community-meta" type="button" disabled={liking} onClick={() => likePost(selectedPost.id)} aria-label={`좋아요 ${selectedPost.likes}개`}>
-                      <SkinIcon id="like" />{selectedPost.likes}
-                    </button>
-                  </article>
-                </SkinPanel>
-                <SkinPanel id="sidebar" className="community-detail-comments">
-                  <h2 className="community-meta"><SkinIcon id="comment" />댓글 {selectedComments.length}</h2>
-                  <div className="community-comment-list" tabIndex={0} aria-label="댓글 목록">
-                    {selectedComments.map((comment) => <div key={comment.id} className="community-comment">
-                      {author(comment.authorName, comment.authorAvatarAssetId, comment.createdAt)}
-                      <p>{comment.content}</p>
-                    </div>)}
-                    {!selectedComments.length && <p>아직 등록된 댓글이 없습니다.</p>}
-                  </div>
-                  <form className="community-comment-form" onSubmit={handleAddComment}>
-                    <select aria-label="댓글 작성 캐릭터" value={commentAuthorId} onChange={(event) => setCommentAuthorId(event.target.value)}>
-                      {characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
-                    </select>
-                    <input aria-label="댓글 내용" placeholder="댓글을 입력하세요" value={commentText} onChange={(event) => setCommentText(event.target.value)} />
-                    <button type="submit" disabled={!commentText.trim()}>댓글 등록</button>
-                  </form>
-                </SkinPanel>
-              </div>
-            </section>
+          {selectedPost && detailOpen && (
+            <CommunityPostDetail
+              key={selectedPost.id}
+              post={selectedPost}
+              comments={selectedComments}
+              characters={characters}
+              author={author}
+              attachment={attachment(selectedPost)}
+              tags={tagsOf(selectedPost)}
+              onBack={() => setSelectedPostId(null)}
+              onLikeCount={(id, likes) => setPosts((previous) =>
+                previous.map((post) => post.id === id ? { ...post, likes } : post)
+              )}
+              onNewComment={(comment) => setCommentsByPost((previous) => ({
+                ...previous,
+                [comment.postId]: [...(previous[comment.postId] ?? []), comment],
+              }))}
+            />
           )}
         </div>
         {menuOpen && (
           <div className="community-drawer-backdrop" onClick={(event) => {
-            if (event.currentTarget === event.target) setMenuOpen(false);
-          }} onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false); }}>
-            <nav className="community-drawer" aria-label="이동 메뉴">
-              <SkinPanel id="sidebar">
-                {navigation.map(([tab, label]) => <button key={tab} type="button" autoFocus={tab === 'chat'} onClick={() => {
-                  setMenuOpen(false);
-                  onNavigate(tab);
-                }}>{label}</button>)}
+            if (event.currentTarget === event.target) closeMenu();
+          }} onKeyDown={(event) => { if (event.key === 'Escape') closeMenu(); }}>
+            <nav id="community-navigation" className="community-drawer" aria-label="이동 메뉴">
+              <SkinPanel id="navigationPanel" className="community-drawer-panel">
+                <div className="community-drawer-emblem" aria-hidden="true">
+                  <SkinIcon id="profileRabbit" />
+                </div>
+                {navigation.map(([tab, label, icon]) => (
+                  <button key={tab} type="button" autoFocus={tab === 'community'}
+                    aria-current={tab === 'community' ? 'page' : undefined}
+                    onClick={() => {
+                      closeMenu();
+                      onNavigate(tab);
+                    }}>
+                    <SkinIcon id={icon} />
+                    <span>{label}</span>
+                  </button>
+                ))}
               </SkinPanel>
             </nav>
           </div>
